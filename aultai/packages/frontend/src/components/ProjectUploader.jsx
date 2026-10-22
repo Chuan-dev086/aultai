@@ -40,6 +40,9 @@ export default function ProjectUploader({ onProjectChange }) {
       .then((s) => {
         if (!cancelled) {
           setStatus(s);
+          if (s.active === "dynamic_project") {
+            setPhase(s.running ? "running" : "uploaded");
+          }
         }
       })
       .catch((err) => {
@@ -90,8 +93,17 @@ export default function ProjectUploader({ onProjectChange }) {
       const out = await startUploadedProject();
       setMessage(`Running on port ${out.port} (pid ${out.pid ?? "?"})`);
       setPhase("running");
-      setStatus({ active: "dynamic_project", port: out.port, running: true });
-      onProjectChange({ name: "dynamic_project", port: out.port });
+      setStatus({
+        active: "dynamic_project",
+        port: out.port,
+        previewPort: out.previewPort,
+        running: true,
+      });
+      onProjectChange({
+        name: "dynamic_project",
+        port: out.port,
+        previewPort: out.previewPort,
+      });
     } catch (err) {
       setError(err);
       setPhase("uploaded");

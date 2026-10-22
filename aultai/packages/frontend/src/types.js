@@ -76,6 +76,18 @@
  */
 
 /**
+ * @typedef {Object} AISolution
+ * @property {string} proposalId
+ * @property {string} file
+ * @property {string} originalCode
+ * @property {string} proposedCode
+ * @property {string} unifiedDiff
+ * @property {string} explanation
+ * @property {string[]} rationaleSteps
+ * @property {"low" | "medium" | "high"} risk
+ */
+
+/**
  * @typedef {Object} GeneratedTestCase
  * @property {string} name
  * @property {string} code
@@ -84,6 +96,7 @@
 /**
  * @typedef {Object} GenerateTestsResponse
  * @property {GeneratedTestCase[]} tests
+ * @property {"live" | "mock"} mode
  */
 
 /**
@@ -113,6 +126,7 @@
 /**
  * @typedef {Object} PerfResult
  * @property {string} id
+ * @property {"shop-api" | "dynamic_project"} project
  * @property {string} endpoint
  * @property {number} concurrency
  * @property {number} duration
@@ -127,7 +141,8 @@
 /**
  * @typedef {Object} ProjectStatus
  * @property {string} active
- * @property {number} port
+ * @property {number | null} port
+ * @property {number | null} previewPort
  * @property {boolean} running
  */
 

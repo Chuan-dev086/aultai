@@ -96,7 +96,7 @@ export async function uploadProject(file) {
 
 /**
  * Start the uploaded project in the background (port 3001).
- * @returns {Promise<{ port: number, pid: number | null }>} Port and pid.
+ * @returns {Promise<{ port: number, previewPort: number, pid: number | null }>} Backend and preview ports.
  */
 export async function startUploadedProject() {
   const res = await apiFetch(`${BASE}/project/start`, { method: "POST" }, "startUploadedProject");
@@ -132,7 +132,7 @@ export async function switchToShopApi() {
 
 /**
  * Current upload/start status of the dynamic project.
- * @returns {Promise<{ active: string, port: number, running: boolean }>} Status.
+ * @returns {Promise<{ active: string, port: number | null, previewPort: number | null, running: boolean }>} Status.
  */
 export async function fetchProjectStatus() {
   const res = await apiFetch(`${BASE}/project/status`, undefined, "fetchProjectStatus");
@@ -182,7 +182,7 @@ export async function analyze() {
 /**
  * Explain a single graph node.
  * @param {string} id Node id (e.g. "checkout.calculateCheckoutTotal").
- * @returns {Promise<{ explanation: string }>} The explanation.
+ * @returns {Promise<{ explanation: string, mode: "live" | "mock" }>} The explanation.
  */
 export async function explainNode(id) {
   const res = await apiFetch(
@@ -197,17 +197,75 @@ export async function explainNode(id) {
 }
 
 /**
+ * Request a reviewable AI fix proposal for supplied code and an error.
+ * @param {{ file: string, code: string, error: string }} request
+ * @returns {Promise<import("../types.js").AISolution>} Unapplied proposal.
+ */
+export async function requestAISolution(request) {
+  const res = await apiFetch(
+    `${BASE}/ai/solution`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    },
+    "requestAISolution",
+  );
+  if (!res.ok) await throwApiError(res, "requestAISolution");
+  return parseJsonResponse(res, "requestAISolution");
+}
+
+/**
+ * Apply an explicitly approved AI solution.
+ * @param {string} proposalId
+ * @returns {Promise<{ applied: true, backupPath: string }>}
+ */
+export async function applyAISolution(proposalId) {
+  const res = await apiFetch(
+    `${BASE}/ai/solution/apply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ proposalId }),
+    },
+    "applyAISolution",
+  );
+  if (!res.ok) await throwApiError(res, "applyAISolution");
+  return parseJsonResponse(res, "applyAISolution");
+}
+
+/**
+ * Revert an explicitly applied AI solution.
+ * @param {string} proposalId
+ * @returns {Promise<{ reverted: true }>}
+ */
+export async function revertAISolution(proposalId) {
+  const res = await apiFetch(
+    `${BASE}/ai/solution/revert`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ proposalId }),
+    },
+    "revertAISolution",
+  );
+  if (!res.ok) await throwApiError(res, "revertAISolution");
+  return parseJsonResponse(res, "revertAISolution");
+}
+
+/**
  * Generate a fix proposal for an issue (no files touched).
  * @param {string} issueId Issue id (e.g. "issue-bug1-checkout-no-floor").
+ * @param {import("../types.js").Issue | null} [issue] Validated issue context for the AI fix.
  * @returns {Promise<import("../types.js").FixProposal>} The fix proposal.
  */
-export async function generateFix(issueId) {
+export async function generateFix(issueId, issue = null) {
   const res = await apiFetch(
     `${BASE}/fix`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ issueId }),
+      body: JSON.stringify({ issueId, ...(issue === null ? {} : { issue }) }),
     },
     "generateFix",
   );
@@ -260,7 +318,7 @@ export async function revertFix(issueId) {
 }
 
 /**
- * Generate a regression test suite (mock; writes test_generated.test.js).
+ * Generate test-case suggestions without writing project files.
  * @returns {Promise<import("../types.js").GenerateTestsResponse>} Generated tests.
  */
 export async function generateTests() {
@@ -284,10 +342,21 @@ export async function runTests() {
 }
 
 /**
+ * Explain the most recent actual test run.
+ * @returns {Promise<{ summary: string, failure_explanations: { testName: string, explanation: string }[] }>}
+ */
+export async function explainTestResults() {
+  const res = await apiFetch(`${BASE}/tests/explain`, { method: "POST" }, "explainTestResults");
+  if (!res.ok) await throwApiError(res, "explainTestResults");
+  return parseJsonResponse(res, "explainTestResults");
+}
+
+/**
  * Run a load test against the local backend.
  * @param {object} config
  * @param {string} [config.endpoint]
  * @param {string} [config.method]
+ * @param {"shop-api" | "dynamic_project"} [config.project]
  * @param {object} [config.payload]
  * @param {number} [config.concurrency]
  * @param {number} [config.duration]
@@ -319,4 +388,14 @@ export async function fetchLastPerf() {
     await throwApiError(res, "fetchLastPerf");
   }
   return parseJsonResponse(res, "fetchLastPerf");
+}
+
+/**
+ * Ask AI to analyze the most recent measured performance result.
+ * @returns {Promise<{ summary: string, recommendations: string[] }>}
+ */
+export async function analyzePerfResult() {
+  const res = await apiFetch(`${BASE}/perf/analyze`, { method: "POST" }, "analyzePerfResult");
+  if (!res.ok) await throwApiError(res, "analyzePerfResult");
+  return parseJsonResponse(res, "analyzePerfResult");
 }

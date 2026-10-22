@@ -30,7 +30,7 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
     setLoading(true);
     setError(null);
     setApplying(false);
-    generateFix(issue.id)
+    generateFix(issue.id, issue)
       .then((p) => {
         if (!cancelled) {
           setProposalState({ issueId: issue.id, value: p });

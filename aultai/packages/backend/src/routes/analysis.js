@@ -2,6 +2,7 @@ import { Router } from "express";
 import { analyzeProject, explainNode } from "../services/analyzer.js";
 import { AnalyzeResponseSchema } from "../models.js";
 import { z } from "zod";
+import { sendAIError } from "./aiErrors.js";
 
 export const analysisRouter = Router();
 
@@ -13,7 +14,7 @@ analysisRouter.post("/analyze", async (req, res) => {
     const { issues, mode } = await analyzeProject();
     res.json(AnalyzeResponseSchema.parse({ issues, mode }));
   } catch (err) {
-    res.status(500).json({ error: { code: "ANALYZE_FAILED", message: err.message } });
+    sendAIError(res, err, "ANALYZE_FAILED");
   }
 });
 
@@ -23,8 +24,7 @@ analysisRouter.post("/analyze", async (req, res) => {
 analysisRouter.post("/node/:id/explain", async (req, res) => {
   try {
     const params = z.object({ id: z.string() }).parse(req.params);
-    const { explanation } = await explainNode(params.id);
-    res.json({ explanation });
+    res.json(await explainNode(params.id));
   } catch (err) {
     if (err.code === "NOT_FOUND") {
       res.status(404).json({
@@ -32,6 +32,6 @@ analysisRouter.post("/node/:id/explain", async (req, res) => {
       });
       return;
     }
-    res.status(500).json({ error: { code: "EXPLAIN_FAILED", message: err.message } });
+    sendAIError(res, err, "EXPLAIN_FAILED");
   }
 });

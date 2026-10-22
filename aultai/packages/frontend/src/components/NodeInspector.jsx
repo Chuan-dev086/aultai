@@ -117,7 +117,7 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
     setExplainError(null);
     try {
       const result = await explainNode(detail.id);
-      setExplanation(result.explanation);
+      setExplanation(result);
     } catch (err) {
       setExplainError(err);
     } finally {
@@ -147,9 +147,12 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
           <p className="mt-1 font-mono text-xs text-red-400">{explainError.message}</p>
         )}
         {explanation !== null && (
-          <p className="mt-1 rounded border border-slate-700 bg-slate-900 p-2 text-sm text-slate-300">
-            {explanation}
-          </p>
+          <div className="mt-1 rounded border border-slate-700 bg-slate-900 p-2">
+            <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
+              {explanation.mode === "live" ? "Gemini AI" : "Offline mock"}
+            </p>
+            <p className="text-sm text-slate-300">{explanation.explanation}</p>
+          </div>
         )}
         <span className="mt-1 inline-block rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-200">
           {detail.type}

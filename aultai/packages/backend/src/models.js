@@ -95,6 +95,7 @@ import { z } from "zod";
 /**
  * @typedef {Object} GenerateTestsResponse
  * @property {GeneratedTestCase[]} tests
+ * @property {"live" | "mock"} mode
  */
 
 /**
@@ -184,6 +185,38 @@ export const FixProposalSchema = z.object({
   risk: z.enum(["low", "medium", "high"]),
 });
 
+export const AISolutionRequestSchema = z.object({
+  file: z.string().min(1).max(512),
+  code: z.string().min(1).max(30000),
+  error: z.string().min(1).max(8000),
+});
+
+export const AISolutionSchema = z.object({
+  proposalId: z.string(),
+  file: z.string(),
+  originalCode: z.string().min(1),
+  proposedCode: z.string().min(1),
+  unifiedDiff: z.string(),
+  explanation: z.string(),
+  rationaleSteps: z.array(z.string()),
+  risk: z.enum(["low", "medium", "high"]),
+});
+
+export const AITestExplanationSchema = z.object({
+  summary: z.string(),
+  failure_explanations: z.array(
+    z.object({
+      testName: z.string(),
+      explanation: z.string(),
+    }),
+  ),
+});
+
+export const AIPerfAnalysisSchema = z.object({
+  summary: z.string(),
+  recommendations: z.array(z.string()),
+});
+
 export const ApplyResponseSchema = z.object({
   applied: z.literal(true),
   backupPath: z.string(),
@@ -200,6 +233,7 @@ export const GeneratedTestCaseSchema = z.object({
 
 export const GenerateTestsResponseSchema = z.object({
   tests: z.array(GeneratedTestCaseSchema),
+  mode: z.enum(["live", "mock"]),
 });
 
 export const SingleTestResultSchema = z.object({
@@ -227,6 +261,7 @@ export const TestRunResultSchema = z.object({
 /**
  * @typedef {Object} PerfResult
  * @property {string} id
+ * @property {"shop-api" | "dynamic_project"} project
  * @property {string} endpoint
  * @property {number} concurrency
  * @property {number} duration
@@ -246,6 +281,7 @@ export const PerfLatencySchema = z.object({
 
 export const PerfResultSchema = z.object({
   id: z.string(),
+  project: z.enum(["shop-api", "dynamic_project"]),
   endpoint: z.string(),
   concurrency: z.number(),
   duration: z.number(),

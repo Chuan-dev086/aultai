@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { generateFix, applyFix, revertFix } from "../services/fixer.js";
-import { FixProposalSchema } from "../models.js";
+import { FixProposalSchema, IssueSchema } from "../models.js";
+import { sendAIError } from "./aiErrors.js";
 
 export const fixesRouter = Router();
 
@@ -12,11 +13,15 @@ const IssueIdBody = z.object({ issueId: z.string() });
  */
 fixesRouter.post("/fix", async (req, res) => {
   try {
-    const { issueId } = IssueIdBody.parse(req.body);
-    const proposal = await generateFix(issueId);
+    const body = IssueIdBody.extend({ issue: IssueSchema.optional() }).parse(req.body);
+    const proposal = await generateFix(body.issueId, body.issue ?? null);
     res.json(FixProposalSchema.parse(proposal));
   } catch (err) {
-    res.status(500).json({ error: { code: "FIX_FAILED", message: err.message } });
+    if (err.code === "UNKNOWN_ISSUE") {
+      res.status(404).json({ error: { code: err.code, message: err.message } });
+      return;
+    }
+    sendAIError(res, err, "FIX_FAILED");
   }
 });
 

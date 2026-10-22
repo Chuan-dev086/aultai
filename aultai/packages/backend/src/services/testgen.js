@@ -1,4 +1,6 @@
-import { writeFile } from "./sandbox.js";
+import { getActiveSubdir, readFile, listJsFiles } from "./sandbox.js";
+import { isMockMode } from "./llm.js";
+import { requestAI } from "./aiService.js";
 
 /**
  * @typedef {Object} GeneratedTestCase
@@ -66,25 +68,56 @@ const MOCK_SUITE = [
 ];
 
 /**
- * Generate a mock regression suite and write it to
- * shop-api/tests/test_generated.test.js (never touches test_checkout.test.js).
+ * Generate test-case suggestions without writing project files.
  * @returns {Promise<{ tests: GeneratedTestCase[] }>} The generated test cases.
  */
 export async function generateTests() {
-  const tests = MOCK_SUITE.map((t) => ({ ...t }));
-  const body = [
-    'import { describe, it, expect } from "vitest";',
-    'import { SAVE10, MINUS50, EXPIRED10 } from "../src/models.js";',
-    'import { TAX_RATE, FREE_SHIPPING_THRESHOLD, FLAT_SHIPPING, tax, shipping } from "../src/pricing.js";',
-    'import { calculateCheckoutTotal } from "../src/checkout.js";',
-    "",
-    'const NOW = new Date("2024-06-01T12:00:00.000Z");',
-    "",
-    'describe("generated checkout regression", () => {',
-    ...tests.map((t) => t.code),
-    "});",
-    "",
-  ].join("\n");
-  await writeFile("shop-api/tests/test_generated.test.js", body);
-  return { tests };
+  if (isMockMode()) {
+    return { tests: MOCK_SUITE.map((test) => ({ ...test })), mode: "mock" };
+  }
+  const active = getActiveSubdir();
+  const sourceFiles = [];
+  let budget = 24000;
+  for (const file of await listJsFiles(active)) {
+    if (budget <= 0) break;
+    try {
+      const source = (await readFile(file)).slice(0, Math.min(5000, budget));
+      sourceFiles.push({ file: file.slice(active.length + 1), source });
+      budget -= Buffer.byteLength(source, "utf8");
+    } catch {
+      continue;
+    }
+  }
+  let dependencies = {};
+  try {
+    const packageInfo = JSON.parse(await readFile(`${active}/package.json`));
+    dependencies = {
+      dependencies: packageInfo.dependencies ?? {},
+      devDependencies: packageInfo.devDependencies ?? {},
+      testScript: packageInfo.scripts?.test ?? null,
+    };
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  const result = await requestAI({
+    task: "generate_tests",
+    context: { project: active, dependencies, files: sourceFiles },
+  });
+  if (!Array.isArray(result.tests)) {
+    throw testGenError("AI_INVALID_RESPONSE", "The AI response did not include test cases.");
+  }
+  const tests = result.tests
+    .filter((item) => item !== null && typeof item.name === "string" && typeof item.code === "string")
+    .slice(0, 20)
+    .map((item) => ({ name: item.name.slice(0, 300), code: item.code.slice(0, 5000) }));
+  if (tests.length === 0) {
+    throw testGenError("AI_INVALID_RESPONSE", "The AI did not return any valid test cases.");
+  }
+  return { tests, mode: "live" };
+}
+
+function testGenError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }

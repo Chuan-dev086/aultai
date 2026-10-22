@@ -1,54 +1,103 @@
-# AultAI — AI-Powered SDLC Tool
+# Gilingan Coffee Supply — React + Express e-commerce sample
 
-AultAI helps engineers understand code, locate bugs, and review AI-generated fixes — demonstrated against a small e-commerce checkout backend with two intentionally planted bugs: a fixed-amount voucher that drives the order total negative (BUG 1: `MINUS50` on a 19.90 cart yields `-23.11`) and an inverted voucher-expiry comparison that accepts expired vouchers while rejecting valid ones (BUG 2).
+A sample online store with a **React** frontend and an **Express.js** backend.
+One command runs both, on one port, in one terminal.
 
-## Layout
+## Requirements
+Node.js 18.18 or newer (check with `node -v`). Get it from https://nodejs.org.
 
-- `packages/workspace/shop-api` — demo subject: Express checkout app + Vitest ground truth (never modified by AultAI, except the one allowed `public/index.html` preview page)
-- `packages/backend` — Express API: code graph (`@babel/parser`), heuristic + LLM analysis with mock fallback, fix proposals with explicit apply/revert (`.bak` backups), child-process Vitest runs, autocannon load tests
-- `packages/frontend` — React + Vite + Tailwind + React Flow: graph explorer, node inspector, issues, fix review, test lab, full-stack preview, perf lab, guided demo stepper
+## Run it
 
-## Setup
+**Easiest (Windows):** double-click `start-windows.bat`.
 
-Requirements: Node.js 20 or newer (check with `node -v`).
+**Or in a terminal**, inside this folder:
 
-**Easiest (Windows):** double-click `start-windows.bat`. The first time it installs packages, then it starts everything and opens the browser.
-
-**Any system, one terminal:**
-
-```sh
+```bash
 npm install
 npm start
 ```
 
-`npm start` picks a free backend port (3000, or the next free one if 3000 is busy or blocked), starts the backend and the shop-api demo, starts the frontend on http://localhost:5173 pointed at that backend, and opens your browser. Press **Ctrl+C** once to stop everything.
+Then open the address the terminal shows, usually **http://localhost:3000**.
 
-Manual start (two terminals) still works:
+If a port is blocked or already in use, the server automatically tries the next one
+(3001, 3002 …) and tells you which address to open.
 
-```sh
-node packages/backend/src/index.js
-npm run dev -w packages/frontend
+Stop the server with **Ctrl+C**.
+
+## Accounts and roles
+
+There are three kinds of account. Sign in with **Sign in** at the top right.
+
+| Role | What they can do | Demo login |
+|---|---|---|
+| **Customer** (`user`) | Shop, check out, see their own orders under **My orders** | `user@gilingan.my` / `user123` |
+| **Editor** | Everything a customer can, plus add and edit products, prices and stock (**Manage products**) | `editor@gilingan.my` / `editor123` |
+| **Admin** | Everything an editor can, plus delete products, change order status, change user roles, delete users, and see sales stats (**Admin dashboard**) | `admin@gilingan.my` / `admin123` |
+
+- Anyone can browse the shop; signing in is needed to check out.
+- New sign-ups are always customers. An admin can promote them to editor or admin from **Admin dashboard → Users**.
+- Permissions are checked on the server, not just hidden in the page.
+- Passwords are stored hashed (scrypt). Change the demo passwords in `backend/server.js` before real use.
+- Accounts, sessions and orders are kept in memory, so they reset when the server restarts.
+
+## Production build
+
+```bash
+npm run build   # builds the React app into frontend/dist
+npm run prod    # serves the API and the built site
 ```
 
-Run the shop-api ground truth directly (optional; expects exactly 2 failures proving the planted bugs):
+## Folder layout
 
-```sh
-npm test
+```
+gilingan-store/
+├── package.json         ← all dependencies and scripts
+├── start-windows.bat    ← double-click to install and run on Windows
+├── backend/
+│   └── server.js        ← Express API + runs the frontend
+└── frontend/
+    ├── index.html
+    ├── vite.config.js
+    └── src/
+        ├── main.jsx, App.jsx, api.js, utils.js, styles.css
+        ├── hooks/        ← useAuth, useCart, useToast
+        └── components/   ← Header, Hero, Filters, ProductCard, ProductModal, CartDrawer,
+                             AuthModal, MyOrders, ProductManager, AdminDashboard, Art, Icons
 ```
 
-## 5-Minute Demo Script
+## API
 
-Follow the DemoStepper in the top bar:
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/categories` | Categories with product counts |
+| GET | `/api/products` | List products. Query: `q`, `category`, `min`, `max`, `inStock`, `sort` (`featured`, `price-asc`, `price-desc`, `rating`, `name`) |
+| GET | `/api/products/:id` | One product plus related products |
+| POST | `/api/discount` | Body `{ "code": "KOPI10" }` — checks a discount code |
+| POST | `/api/orders` | Signed in. Body `{ items: [{id, qty}], customer: {name, email, address, city, postcode}, discountCode }` |
+| GET | `/api/orders/:id` | One order (its owner or an admin) |
+| POST | `/api/auth/register` | Create a customer account |
+| POST | `/api/auth/login` | Sign in, returns a token |
+| POST | `/api/auth/logout` | Sign out |
+| GET | `/api/auth/me` | The signed-in account |
+| GET | `/api/my/orders` | The signed-in account's orders |
+| POST / PUT | `/api/products`, `/api/products/:id` | Add / edit a product (editor, admin) |
+| DELETE | `/api/products/:id` | Delete a product (admin) |
+| GET | `/api/admin/stats` | Revenue, order and stock summary (admin) |
+| GET / PATCH | `/api/admin/orders`, `/api/admin/orders/:id` | All orders / change status (admin) |
+| GET / PATCH / DELETE | `/api/admin/users`, `/api/admin/users/:id` | List users / change role / delete (admin) |
 
-1. **Explore (Graph)** — Browse the dagre-laid-out call graph; click `checkout.calculateCheckoutTotal` to inspect its source, docstring, callers, and callees. Filter by file or search by node id.
-2. **Diagnose (Analyze)** — Click Analyze. The backend returns exactly 2 high-severity issues (BUG 1 in `checkout.js:40`, BUG 2 in `vouchers.js:9`) in MOCK MODE.
-3. **Review (Issue modal)** — Click an issue to open FixReview: original vs proposed code, unified diff, rationale, impacted nodes. Click Apply Fix (explicit action, creates a `.bak`); Undo reverts.
-4. **Test (Tests tab)** — Generate the 8-test regression suite, then Run Tests. With bugs present expect failures; after applying the BUG 1 fix the floor-at-zero tests pass.
-5. **Verify (Preview/Perf)** — Preview tab: checkout 1× 19.90 with MINUS50 in the live iframe and watch the red "Total cannot be negative!" banner (-23.11). After applying the BUG 1 fix, click **Reload preview** and check out again: the total is 6.99 (discount capped at the subtotal; tax and shipping still apply). Undo brings the bug back. Perf tab: hammer `POST /shop-api/cart/checkout` with autocannon and compare RPS / p95 / error rate across runs.
+Signed-in requests send the header `Authorization: Bearer <token>`.
+
+Discount codes for testing: `KOPI10` (10% off) and `WELCOME15` (15% off).
+
+## Troubleshooting
+
+- **`'npm' is not recognized`**: Node.js isn't installed, or the terminal was opened before installing it. Install Node.js, then open a new terminal.
+- **The page says "Store unavailable"**: the server stopped. Run `npm start` again and refresh.
+- **Want a specific port?** Windows: `set PORT=8080 && npm start`. Mac/Linux: `PORT=8080 npm start`.
 
 ## Notes
-
-- **Works from any folder:** the workspace path is resolved relative to the backend, so the project runs wherever it is unzipped (set `WORKSPACE_DIR` to override). See `FIXES.md` for the bugs fixed before the presentation.
-
-- **MOCK MODE:** Without `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, all AI calls (`llm.js`) return deterministic offline responses — the demo works fully offline. Set either key to attempt live provider calls (failures fall back to mock, never throw).
-- **Safety rules:** AultAI never auto-applies fixes (apply is an explicit user action with `.bak` backup + revert), never `eval`s analyzed code (parsing is `@babel/parser` only), and runs Vitest in a child process, never in-process.
+- Data is kept in memory, so it resets when the server restarts. Replace the `products` and `orders` arrays in `backend/server.js` with a database for real use.
+- Prices and stock are always checked on the server when an order is placed.
+- No payment is taken; placing an order only reserves stock and returns an order number.
+- Fonts are bundled with the project, so the site works without an internet connection.

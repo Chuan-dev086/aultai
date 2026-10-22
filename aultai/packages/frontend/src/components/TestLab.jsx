@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { generateTests, runTests } from "../api/client.js";
+import { explainTestResults, generateTests, runTests } from "../api/client.js";
 
 /**
- * TestLab — generate and run the shop-api regression suite.
+ * TestLab — propose tests, run the active project's suite, and explain results.
  * @returns {import("react").JSX.Element} The testing lab panel.
  */
 export default function TestLab() {
@@ -11,9 +11,11 @@ export default function TestLab() {
   const [generating, setGenerating] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
+  const [explanation, setExplanation] = useState(null);
+  const [explaining, setExplaining] = useState(false);
 
   /**
-   * Generate the mock regression suite.
+   * Generate test suggestions.
    * @returns {Promise<void>}
    */
   async function onGenerate() {
@@ -21,7 +23,7 @@ export default function TestLab() {
     setError(null);
     try {
       const out = await generateTests();
-      setGenerated(out.tests);
+      setGenerated(out);
     } catch (err) {
       setError(err);
     } finally {
@@ -30,7 +32,7 @@ export default function TestLab() {
   }
 
   /**
-   * Run the shop-api Vitest suite.
+   * Run the active project's test command.
    * @returns {Promise<void>}
    */
   async function onRun() {
@@ -39,10 +41,24 @@ export default function TestLab() {
     try {
       const out = await runTests();
       setResult(out);
+      setExplanation(null);
     } catch (err) {
       setError(err);
     } finally {
       setRunning(false);
+    }
+
+  }
+
+  async function onExplainResults() {
+    setExplaining(true);
+    setError(null);
+    try {
+      setExplanation(await explainTestResults());
+    } catch (err) {
+      setError(err);
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -74,10 +90,10 @@ export default function TestLab() {
       {generated !== null && (
         <div>
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Generated tests ({generated.length})
+            {generated.mode === "live" ? "AI test suggestions" : "Offline mock test suggestions"} ({generated.tests.length})
           </h3>
           <pre className="max-h-64 overflow-y-auto rounded border border-slate-700 bg-slate-950 p-2 font-mono text-xs text-slate-200">
-            {generated.map((t) => t.code).join("\n\n")}
+            {generated.tests.map((t) => t.code).join("\n\n")}
           </pre>
         </div>
       )}
@@ -86,6 +102,24 @@ export default function TestLab() {
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
             Results: {result.passed}/{result.total} passed ({result.duration_ms}ms)
           </h3>
+          <button
+            type="button"
+            onClick={onExplainResults}
+            disabled={explaining}
+            className="mb-2 rounded bg-indigo-700 px-3 py-1 text-sm text-white hover:bg-indigo-600 disabled:opacity-50"
+          >
+            {explaining ? "Explaining…" : "Explain Real Test Results with AI"}
+          </button>
+          {explanation !== null && (
+            <div className="mb-3 rounded border border-slate-700 bg-slate-900 p-3 text-sm text-slate-300">
+              <p>{explanation.summary}</p>
+              {explanation.failure_explanations.map((item) => (
+                <p key={item.testName} className="mt-2">
+                  <span className="font-mono text-amber-300">{item.testName}: </span>{item.explanation}
+                </p>
+              ))}
+            </div>
+          )}
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="text-xs uppercase tracking-wide text-slate-500">

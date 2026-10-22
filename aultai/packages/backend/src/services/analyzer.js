@@ -1,6 +1,7 @@
 import { buildGraph } from "./graphBuilder.js";
-import { complete, isMockMode } from "./llm.js";
-import { listJsFiles, readFile } from "./sandbox.js";
+import { isMockMode } from "./llm.js";
+import { getActiveSubdir, readFile } from "./sandbox.js";
+import { requestAI } from "./aiService.js";
 import { IssueSchema } from "../models.js";
 
 /**
@@ -10,13 +11,12 @@ import { IssueSchema } from "../models.js";
 const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 
 /**
- * Run deterministic heuristics plus an LLM pass over shop-api sources.
+ * Run deterministic heuristics plus an AI pass over the active project.
  * @returns {Promise<{ issues: Issue[], mode: "live" | "mock" }>} Issues and mode.
  */
 export async function analyzeProject() {
   const mode = isMockMode() ? "mock" : "live";
   const { nodes } = await buildGraph();
-  const byId = new Map(nodes.map((n) => [n.id, n]));
 
   const heuristic = runHeuristics(nodes);
   const llmIssues = await runLlmPass(nodes);
@@ -42,7 +42,6 @@ export async function analyzeProject() {
     }
     return a.lineno - b.lineno;
   });
-  void byId;
   return { issues: deduped, mode };
 }
 
@@ -53,7 +52,7 @@ export async function analyzeProject() {
  * @throws {Error} With code "NOT_FOUND" when the node does not exist.
  */
 export async function explainNode(nodeId) {
-  const { nodes } = await buildGraph();
+  const { nodes, edges } = await buildGraph();
   const node = nodes.find((n) => n.id === nodeId);
   if (node === undefined) {
     const err = new Error(`Node not found: ${nodeId}`);
@@ -61,28 +60,37 @@ export async function explainNode(nodeId) {
     throw err;
   }
   if (isMockMode()) {
-    return { explanation: mockExplanation(node) };
+    return { explanation: mockExplanation(node), mode: "mock" };
   }
-  const explanation = await complete({
-    system: "Explain this code node in 3-5 sentences for a developer.",
-    user: `${node.id}\n${node.signature ?? ""}\n${node.source ?? ""}`,
+  const result = await requestAI({
+    task: "explain",
+    context: {
+      project: getActiveSubdir(),
+      node: {
+        id: node.id,
+        type: node.type,
+        file: node.file,
+        signature: node.signature,
+        source: node.source,
+      },
+      callers: edges.filter((edge) => edge.type === "calls" && edge.target === node.id).map((edge) => edge.source),
+      callees: edges.filter((edge) => edge.type === "calls" && edge.source === node.id).map((edge) => edge.target),
+    },
   });
-  return {
-    explanation: typeof explanation === "string" ? explanation : JSON.stringify(explanation),
-  };
+  if (typeof result.explanation !== "string") {
+    throw analysisError("AI_INVALID_RESPONSE", "The AI response did not include an explanation.");
+  }
+  return { explanation: result.explanation, mode: "live" };
 }
 
 /**
- * Deterministic pattern checks over shop-api function/method sources.
+ * Deterministic pattern checks over function/method sources.
  * @param {object[]} nodes Graph nodes.
  * @returns {object[]} Raw issue candidates (may include applyVoucher refs).
  */
 function runHeuristics(nodes) {
   const out = [];
   for (const n of nodes) {
-    if (!n.file?.startsWith("shop-api/")) {
-      continue;
-    }
     if (n.type !== "function" && n.type !== "method") {
       continue;
     }
@@ -156,35 +164,84 @@ function runHeuristics(nodes) {
 }
 
 /**
- * LLM pass over shop-api sources. In mock mode returns the exact demo issues.
+ * AI pass over active-project sources. Offline mode preserves demo issues.
  * @param {object[]} nodes Graph nodes (used to bound source loading).
  * @returns {Promise<object[]>} Raw issue candidates.
  */
 async function runLlmPass(nodes) {
-  const files = [...new Set(nodes.filter((n) => n.file?.startsWith("shop-api/src/")).map((n) => n.file))];
+  const active = getActiveSubdir();
+  const files = [...new Set(
+    nodes
+      .filter((node) => node.file?.startsWith(`${active}/`) && /\.(js|jsx)$/.test(node.file))
+      .map((node) => node.file),
+  )];
   if (isMockMode()) {
-    void files;
-    return mockIssues();
+    return active === "shop-api" ? mockIssues() : [];
   }
-  const chunks = [];
-  for (const f of files.slice(0, 8)) {
+  const sourceFiles = [];
+  const lineCounts = new Map();
+  let remainingBytes = 32000;
+  for (const file of files) {
+    if (remainingBytes <= 0) break;
     try {
-      const text = await readFile(f);
-      chunks.push(`--- ${f} ---\n${text.slice(0, 4000)}`);
+      const text = await readFile(file);
+      const source = text.slice(0, Math.min(6000, remainingBytes));
+      sourceFiles.push({ file: file.slice(active.length + 1), source });
+      lineCounts.set(file, text.split(/\r?\n/).length);
+      remainingBytes -= Buffer.byteLength(source, "utf8");
     } catch {
-      // Skip unreadable files in the live pass.
+      continue;
     }
   }
-  void listJsFiles;
-  const result = await complete({
-    system: "You are a static-analysis assistant. Return JSON with an `issues` array.",
-    user: `Find bugs in these sources:\n${chunks.join("\n")}`,
-    json_schema: { required: ["issues"] },
+  const result = await requestAI({
+    task: "analyze",
+    context: { project: active, files: sourceFiles },
   });
-  if (typeof result === "object" && result !== null && Array.isArray(result.issues)) {
-    return result.issues;
+  if (!Array.isArray(result.issues)) {
+    throw analysisError("AI_INVALID_RESPONSE", "The AI analysis response did not include an issues array.");
   }
-  return [];
+  const normalized = result.issues.flatMap((candidate) => normalizeAIssue(candidate, active, nodes, files, lineCounts));
+  if (result.issues.length > 0 && normalized.length === 0) {
+    throw analysisError("AI_INVALID_RESPONSE", "The AI findings did not map to valid source files and lines in the active project.");
+  }
+  return normalized;
+}
+
+function normalizeAIssue(candidate, active, nodes, files, lineCounts) {
+  if (candidate === null || typeof candidate !== "object" || typeof candidate.file !== "string") {
+    return [];
+  }
+  const requested = candidate.file.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  const fullPath = requested.startsWith(`${active}/`) ? requested : `${active}/${requested}`;
+  if (!files.includes(fullPath)) return [];
+  const fileNodes = nodes.filter((node) => node.file === fullPath);
+  const nodeId = fileNodes.some((node) => node.id === candidate.node_id)
+    ? candidate.node_id
+    : fileNodes[0]?.id;
+  if (nodeId === undefined) return [];
+  const lineNumber = Number.isInteger(candidate.lineno) && candidate.lineno > 0 ? candidate.lineno : 1;
+  if (lineNumber > (lineCounts.get(fullPath) ?? 0)) return [];
+  const issue = {
+    id: typeof candidate.id === "string" && candidate.id.length > 0
+      ? candidate.id.slice(0, 160)
+      : `ai-${fullPath.replace(/[^a-zA-Z0-9]+/g, "-")}-${Number(candidate.lineno) || 1}`,
+    title: typeof candidate.title === "string" ? candidate.title.slice(0, 240) : "",
+    severity: ["low", "medium", "high"].includes(candidate.severity) ? candidate.severity : "medium",
+    node_id: nodeId,
+    file: fullPath,
+    lineno: lineNumber,
+    evidence: typeof candidate.evidence === "string" ? candidate.evidence.slice(0, 1000) : "",
+    explanation: typeof candidate.explanation === "string" ? candidate.explanation.slice(0, 4000) : "",
+    suggested_action: typeof candidate.suggested_action === "string" ? candidate.suggested_action.slice(0, 2000) : "",
+  };
+  const parsed = IssueSchema.safeParse(issue);
+  return parsed.success ? [parsed.data] : [];
+}
+
+function analysisError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 /**

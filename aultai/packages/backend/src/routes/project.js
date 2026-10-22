@@ -67,8 +67,8 @@ projectRouter.post("/project/upload", parseUploadedFile, async (req, res) => {
  */
 projectRouter.post("/project/start", async (req, res) => {
   try {
-    const { port, pid } = await startProject();
-    res.json({ port, pid: pid ?? null });
+    const { port, previewPort, pid } = await startProject();
+    res.json({ port, previewPort, pid: pid ?? null });
   } catch (err) {
     res.status(500).json({ error: { code: err.code ?? "START_FAILED", message: err.message } });
   }

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { runPerfTest } from "../api/client.js";
+import { useEffect, useState } from "react";
+import { analyzePerfResult, runPerfTest } from "../api/client.js";
 
 const DEFAULT_PAYLOAD = {
   cart: { items: [{ productId: "p1", quantity: 1 }] },
@@ -40,14 +40,25 @@ function arrowClass(arrow) {
  * PerfLab — configure, run, and display load tests.
  * @returns {import("react").JSX.Element} The perf lab panel.
  */
-export default function PerfLab() {
-  const [endpoint, setEndpoint] = useState("/shop-api/cart/checkout");
+export default function PerfLab({ projectName, projectRunning }) {
+  const [endpoint, setEndpoint] = useState(projectName === "shop-api" ? "/shop-api/cart/checkout" : "/");
+  const [method, setMethod] = useState(projectName === "shop-api" ? "POST" : "GET");
   const [concurrency, setConcurrency] = useState(10);
   const [duration, setDuration] = useState(5);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [previous, setPrevious] = useState(null);
   const [error, setError] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  useEffect(() => {
+    setEndpoint(projectName === "shop-api" ? "/shop-api/cart/checkout" : "/");
+    setMethod(projectName === "shop-api" ? "POST" : "GET");
+    setResult(null);
+    setPrevious(null);
+    setAiAnalysis(null);
+  }, [projectName]);
 
   /**
    * Run a load test with the current config.
@@ -58,18 +69,33 @@ export default function PerfLab() {
     setError(null);
     try {
       const out = await runPerfTest({
+        project: projectName,
         endpoint,
-        method: "POST",
-        payload: DEFAULT_PAYLOAD,
+        method,
+        payload: method === "GET" || method === "HEAD" ? null : DEFAULT_PAYLOAD,
         concurrency: Number(concurrency),
         duration: Number(duration),
       });
       setPrevious(result);
       setResult(out);
+      setAiAnalysis(null);
     } catch (err) {
       setError(err);
     } finally {
       setRunning(false);
+    }
+
+  }
+
+  async function onAnalyzeResult() {
+    setAnalyzing(true);
+    setError(null);
+    try {
+      setAiAnalysis(await analyzePerfResult());
+    } catch (err) {
+      setError(err);
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -107,6 +133,17 @@ export default function PerfLab() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-slate-300">
+          Method
+          <select
+            value={method}
+            onChange={(ev) => setMethod(ev.target.value)}
+            className="rounded bg-slate-800 px-2 py-1 text-sm text-slate-200"
+          >
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-slate-300">
           Concurrency ({concurrency})
           <input
             type="range"
@@ -131,12 +168,15 @@ export default function PerfLab() {
         <button
           type="button"
           onClick={onRun}
-          disabled={running}
+          disabled={running || !projectRunning}
           className="rounded bg-green-700 px-3 py-1 text-sm text-white hover:bg-green-600 disabled:opacity-50"
         >
-          {running ? "Running…" : "Run Test"}
+          {running ? "Running…" : "Run Perf Test"}
         </button>
       </div>
+      {!projectRunning && (
+        <p className="text-sm text-amber-300">Start the uploaded project in Preview or Projects before running a performance test.</p>
+      )}
       {running && <p className="text-sm text-slate-500">Hammering {endpoint}…</p>}
       {error !== null && (
         <p className="rounded border border-red-900 bg-red-950 p-2 font-mono text-xs text-red-300">
@@ -176,9 +216,25 @@ export default function PerfLab() {
             </div>
           </div>
           <p className="mt-2 font-mono text-xs text-slate-500">
-            {result.totalRequests} requests, {result.errors} errors, {result.concurrency} conns,{" "}
+            {result.project} — {result.totalRequests} requests, {result.errors} errors, {result.concurrency} conns,{" "}
             {result.duration}s, {result.timestamp}
           </p>
+          <button
+            type="button"
+            onClick={onAnalyzeResult}
+            disabled={analyzing}
+            className="mt-3 rounded bg-indigo-700 px-3 py-1 text-sm text-white hover:bg-indigo-600 disabled:opacity-50"
+          >
+            {analyzing ? "Analyzing…" : "Analyze Metrics with AI"}
+          </button>
+          {aiAnalysis !== null && (
+            <div className="mt-3 rounded border border-slate-700 bg-slate-900 p-3">
+              <p className="text-sm text-slate-200">{aiAnalysis.summary}</p>
+              <ul className="mt-2 list-disc pl-5 text-sm text-slate-300">
+                {aiAnalysis.recommendations.map((recommendation) => <li key={recommendation}>{recommendation}</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>

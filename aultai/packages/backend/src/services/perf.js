@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import autocannon from "autocannon";
 import { PORT } from "../config.js";
+import { DYNAMIC_PORT, projectStatus } from "./projectManager.js";
+import { getActiveSubdir } from "./sandbox.js";
 
 /**
  * @typedef {import("../models.js").PerfResult} PerfResult
@@ -34,14 +36,27 @@ export async function runLoadTest(opts = {}) {
   const endpoint = opts.endpoint ?? "/shop-api/cart/checkout";
   const method = (opts.method ?? "POST").toUpperCase();
   const payload = opts.payload === undefined ? DEFAULT_PAYLOAD : opts.payload;
-  const concurrency = clampInt(opts.concurrency ?? 10, 1, 500);
-  const duration = clampInt(opts.duration ?? 5, 1, 60);
-  const url = `http://localhost:${PORT}${endpoint}`;
+  const activeProject = getActiveSubdir();
+  if (opts.project !== undefined && opts.project !== activeProject) {
+    throw perfError("ACTIVE_PROJECT_CHANGED", "The active project changed. Refresh and retry the performance test.");
+  }
+  validateEndpoint(endpoint, activeProject);
+  const concurrency = validateInt(opts.concurrency ?? 10, "concurrency", 1, 100);
+  const duration = validateInt(opts.duration ?? 5, "duration", 1, 60);
+  let port = PORT;
+  if (activeProject === "dynamic_project") {
+    if (!projectStatus().running) {
+      throw perfError("PROJECT_NOT_RUNNING", "Start the uploaded project before running a performance test.");
+    }
+    port = DYNAMIC_PORT;
+  }
+  const url = `http://127.0.0.1:${port}${endpoint}`;
   const result = await runAutocannon({ url, method, payload, concurrency, duration });
   const totalRequests = result.requests?.total ?? 0;
   const errors = result.errors ?? 0;
   const perf = {
     id: randomUUID(),
+    project: activeProject,
     endpoint,
     concurrency,
     duration,
@@ -104,12 +119,55 @@ function runAutocannon({ url, method, payload, concurrency, duration }) {
  * @param {number} max Maximum.
  * @returns {number} Clamped integer.
  */
-function clampInt(value, min, max) {
+function validateInt(value, name, min, max) {
   const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return min;
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw perfError("INVALID_PERF_REQUEST", `${name} must be an integer between ${min} and ${max}.`);
   }
-  return Math.min(max, Math.max(min, Math.floor(n)));
+  return n;
+}
+
+/**
+ * Restrict load-test targets to the active project's local application.
+ * @param {string} endpoint Relative URL path requested by the caller.
+ * @param {string} project Active project name.
+ * @returns {void}
+ */
+function validateEndpoint(endpoint, project) {
+  if (
+    typeof endpoint !== "string" ||
+    !endpoint.startsWith("/") ||
+    endpoint.startsWith("//") ||
+    endpoint.includes("\\") ||
+    endpoint.includes("#") ||
+    /[\r\n\0]/.test(endpoint)
+  ) {
+    throw perfError("INVALID_PERF_ENDPOINT", "Endpoint must be a local application path beginning with /.");
+  }
+  let url;
+  try {
+    url = new URL(endpoint, "http://127.0.0.1");
+  } catch {
+    throw perfError("INVALID_PERF_ENDPOINT", "Endpoint must be a valid local application path.");
+  }
+  if (url.origin !== "http://127.0.0.1") {
+    throw perfError("INVALID_PERF_ENDPOINT", "External performance-test targets are not allowed.");
+  }
+  if (project === "shop-api" && !/^\/shop-api(?:\/|$)/.test(url.pathname)) {
+    throw perfError("INVALID_PERF_ENDPOINT", "The shop-api target must use a /shop-api path.");
+  }
+}
+
+/**
+ * Build a performance-request error with a stable API code.
+ * @param {string} code Error code.
+ * @param {string} message User-facing description.
+ * @returns {Error} The error.
+ */
+function perfError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 /**

@@ -9,6 +9,7 @@ import { fixesRouter } from "./routes/fixes.js";
 import { testsRouter } from "./routes/tests.js";
 import { perfRouter } from "./routes/perf.js";
 import { projectRouter } from "./routes/project.js";
+import { aiRouter } from "./routes/ai.js";
 import {
   startShopApi,
   stopShopApi,
@@ -85,6 +86,7 @@ app.use("/api", fixesRouter);
 app.use("/api", testsRouter);
 app.use("/api", perfRouter);
 app.use("/api", projectRouter);
+app.use("/api", aiRouter);
 
 // Full-Stack Preview: serve the shop-api demo page from the backend so the
 // Preview tab works with a single server on :3000.

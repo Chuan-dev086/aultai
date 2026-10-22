@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
-import { safePath, readFile, writeFile } from "./sandbox.js";
+import { getActiveSubdir, safePath, readFile, writeFile } from "./sandbox.js";
 import { isMockMode } from "./llm.js";
+import { analyzeProject } from "./analyzer.js";
+import { requestAI } from "./aiService.js";
 
 /**
  * @typedef {import("../models.js").FixProposal} FixProposal
@@ -41,24 +43,83 @@ const MOCK_FIXES = {
     impactedNodes: ["vouchers.validateVoucher"],
   },
 };
+const generatedFixes = new Map();
 
 /**
- * Generate a fix proposal for a known issue (mock mode only).
+ * Generate a fix proposal without modifying project code.
  * @param {string} issueId Issue id (e.g. "issue-bug1-checkout-no-floor").
  * @returns {Promise<FixProposal>} The fix proposal.
- * @throws {Error} When the issue id is unknown or live mode is active.
+ * @throws {Error} When the issue is unknown, the provider fails, or the patch is invalid.
  */
-export async function generateFix(issueId) {
-  if (!isMockMode()) {
-    throw liveOnly("generateFix");
+export async function generateFix(issueId, suppliedIssue = null) {
+  if (isMockMode()) {
+    if (getActiveSubdir() !== "shop-api") {
+      const err = new Error("Configure GEMINI_API_KEY to generate fixes for uploaded projects.");
+      err.code = "AI_PROVIDER_NOT_CONFIGURED";
+      throw err;
+    }
+    const fix = MOCK_FIXES[issueId];
+    if (fix === undefined) {
+      const err = new Error(`Unknown issue: ${issueId}`);
+      err.code = "UNKNOWN_ISSUE";
+      throw err;
+    }
+    return { ...fix, rationaleSteps: [...fix.rationaleSteps], impactedNodes: [...fix.impactedNodes] };
   }
-  const fix = MOCK_FIXES[issueId];
-  if (fix === undefined) {
-    const err = new Error(`Unknown issue: ${issueId}`);
+  const cacheKey = `${getActiveSubdir()}:${issueId}`;
+  const cached = generatedFixes.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const analyzed = suppliedIssue === null ? await analyzeProject() : null;
+  const issue = suppliedIssue ?? analyzed.issues.find((candidate) => candidate.id === issueId);
+  if (issue === undefined || issue.id !== issueId || issue.file?.startsWith(`${getActiveSubdir()}/`) !== true) {
+    const err = new Error(`Issue not found in the active project: ${issueId}`);
     err.code = "UNKNOWN_ISSUE";
     throw err;
   }
-  return { ...fix, rationaleSteps: [...fix.rationaleSteps], impactedNodes: [...fix.impactedNodes] };
+  const source = await readFile(issue.file);
+  const result = await requestAI({
+    task: "fix",
+    context: {
+      project: getActiveSubdir(),
+      file: issue.file,
+      source,
+      issue: {
+        title: issue.title,
+        severity: issue.severity,
+        evidence: issue.evidence,
+        explanation: issue.explanation,
+        suggested_action: issue.suggested_action,
+      },
+    },
+  });
+  if (
+    typeof result.originalCode !== "string" ||
+    result.originalCode.length === 0 ||
+    !source.includes(result.originalCode) ||
+    typeof result.proposedCode !== "string" ||
+    result.proposedCode.length === 0 ||
+    !Array.isArray(result.rationaleSteps)
+  ) {
+    const err = new Error("The AI returned a patch that does not match the current source. No code was changed.");
+    err.code = "AI_INVALID_RESPONSE";
+    throw err;
+  }
+  const proposal = {
+    id: `fix-${issue.id}`,
+    issueId: issue.id,
+    file: issue.file,
+    originalCode: result.originalCode,
+    proposedCode: result.proposedCode,
+    unifiedDiff: makeDiff(issue.file, result.originalCode, result.proposedCode),
+    explanation: typeof result.explanation === "string" ? result.explanation : issue.explanation,
+    rationaleSteps: result.rationaleSteps.filter((step) => typeof step === "string"),
+    impactedNodes: [issue.node_id],
+    risk: ["low", "medium", "high"].includes(result.risk) ? result.risk : "medium",
+  };
+  generatedFixes.set(cacheKey, proposal);
+  return proposal;
 }
 
 /**
@@ -71,13 +132,24 @@ export async function generateFix(issueId) {
 export async function applyFix(issueId) {
   const fix = await generateFix(issueId);
   const current = await readFile(fix.file);
-  if (!current.includes(fix.originalCode)) {
-    const err = new Error(`originalCode not found in ${fix.file}; the file may have changed`);
+  const first = current.indexOf(fix.originalCode);
+  if (first === -1 || first !== current.lastIndexOf(fix.originalCode)) {
+    const err = new Error(`The proposed code in ${fix.file} is missing or ambiguous; the file may have changed`);
     err.code = "PATCH_CONFLICT";
     throw err;
   }
+  const backupAbs = await safePath(`${fix.file}.bak`);
+  try {
+    await fs.stat(backupAbs);
+    const err = new Error(`A backup already exists for ${fix.file}; revert or preserve it before applying another fix`);
+    err.code = "PATCH_CONFLICT";
+    throw err;
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
   await writeFile(`${fix.file}.bak`, current);
-  await writeFile(fix.file, current.replace(fix.originalCode, fix.proposedCode));
+  const updated = current.slice(0, first) + fix.proposedCode + current.slice(first + fix.originalCode.length);
+  await writeFile(fix.file, updated);
   return { applied: true, backupPath: `${fix.file}.bak` };
 }
 
@@ -106,11 +178,12 @@ export async function revertFix(issueId) {
   return { reverted: true };
 }
 
-/**
- * Build a live-mode-only error for non-mock generation paths.
- * @param {string} fn Function name attempted in live mode.
- * @returns {Error} Error indicating live generation is out of scope.
- */
-function liveOnly(fn) {
-  return new Error(`${fn} live-mode generation is not implemented in this phase (mock only)`);
+function makeDiff(file, originalCode, proposedCode) {
+  return [
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    "@@",
+    ...originalCode.split(/\r?\n/).map((line) => `-${line}`),
+    ...proposedCode.split(/\r?\n/).map((line) => `+${line}`),
+  ].join("\n");
 }

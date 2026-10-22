@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { SHOP_API_DIR } from "../config.js";
+import treeKill from "tree-kill";
+import { SHOP_API_DIR, WORKSPACE_DIR } from "../config.js";
+import { getActiveSubdir } from "./sandbox.js";
 
 /**
  * @typedef {Object} SingleTestResult
@@ -20,6 +22,9 @@ import { SHOP_API_DIR } from "../config.js";
  */
 
 const TIMEOUT_MS = 120000;
+const OUTPUT_LIMIT = 1024 * 1024;
+let lastTestRun = null;
+const activeTestRuns = new Map();
 
 /**
  * Run the shop-api Vitest suite in a child process with --reporter=json.
@@ -29,38 +34,114 @@ const TIMEOUT_MS = 120000;
 export function runTests() {
   return new Promise((resolve, reject) => {
     const started = Date.now();
+    const active = getActiveSubdir();
+    const args = active === "shop-api" ? ["test", "--", "--reporter=json"] : ["test"];
     // NOTE: on Windows, npm is a .cmd shim and requires a shell to execute.
-    const child = spawn("npm", ["test", "--", "--reporter=json"], {
-      cwd: path.resolve(SHOP_API_DIR),
+    const child = spawn("npm", args, {
+      cwd: active === "shop-api" ? path.resolve(SHOP_API_DIR) : path.resolve(WORKSPACE_DIR, active),
       shell: process.platform === "win32",
       windowsHide: true,
     });
+    const runs = activeTestRuns.get(active) ?? new Set();
+    const run = {
+      child,
+      closed: new Promise((resolveClose) => {
+        child.once("close", resolveClose);
+      }),
+    };
+    runs.add(run);
+    activeTestRuns.set(active, runs);
+    const removeRun = () => {
+      runs.delete(run);
+      if (runs.size === 0) {
+        activeTestRuns.delete(active);
+      }
+    };
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
-      child.kill();
+      if (child.pid !== undefined) {
+        treeKill(child.pid, (err) => {
+          if (err && err.code !== "ESRCH") {
+            console.error(`[tests] failed to stop timed-out test process: ${err.message}`);
+          }
+        });
+      }
       reject(testTimeout());
     }, TIMEOUT_MS);
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = `${stdout}${String(chunk)}`.slice(-OUTPUT_LIMIT);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = `${stderr}${String(chunk)}`.slice(-OUTPUT_LIMIT);
     });
     child.on("error", (err) => {
       clearTimeout(timer);
+      removeRun();
       reject(err);
     });
-    child.on("close", () => {
+    child.on("close", (code) => {
       clearTimeout(timer);
+      removeRun();
       try {
-        resolve(parseVitestJson(stdout, Date.now() - started));
+        let result;
+        try {
+          result = parseVitestJson(stdout, Date.now() - started);
+        } catch {
+          const passed = code === 0;
+          result = {
+            total: 1,
+            passed: passed ? 1 : 0,
+            failed: passed ? 0 : 1,
+            duration_ms: Date.now() - started,
+            tests: [{
+              name: "npm test",
+              status: passed ? "passed" : "failed",
+              duration_ms: Date.now() - started,
+              error: passed ? null : (stderr || stdout).slice(-2000) || `npm test exited with code ${code}`,
+            }],
+          };
+        }
+        lastTestRun = { project: active, result };
+        resolve(result);
       } catch (err) {
-        err.message = `Failed to parse vitest JSON output: ${err.message}\nstderr: ${stderr.slice(0, 500)}`;
         reject(err);
       }
     });
   });
+}
+
+/**
+ * Stop and await tests running against a workspace before replacing its files.
+ * @param {string} project Workspace subdirectory name.
+ * @returns {Promise<void>} Resolves when all matching test processes have exited.
+ */
+export async function stopTestsForProject(project) {
+  const runs = [...(activeTestRuns.get(project) ?? [])];
+  await Promise.all(runs.map(async ({ child, closed }) => {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve, reject) => {
+        treeKill(child.pid, (err) => {
+          if (err?.code === "ESRCH") {
+            resolve();
+          } else if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+    }
+    await closed;
+  }));
+}
+
+/**
+ * Return the most recent actual test run for AI explanation.
+ * @returns {TestRunResult | null} Last result, if tests were executed.
+ */
+export function getLastTestRun() {
+  return lastTestRun?.project === getActiveSubdir() ? lastTestRun.result : null;
 }
 
 /**

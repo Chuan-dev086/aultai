@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { analyze, fetchGraph, loadProject, revertFix } from "./api/client.js";
+import { analyze, fetchGraph, fetchProjectStatus, loadProject, revertFix, startUploadedProject } from "./api/client.js";
 import FileTree from "./components/FileTree.jsx";
 import CodeGraph from "./components/CodeGraph.jsx";
 import NodeInspector from "./components/NodeInspector.jsx";
@@ -10,6 +10,7 @@ import PreviewLab from "./components/PreviewLab.jsx";
 import PerfLab from "./components/PerfLab.jsx";
 import DemoStepper from "./components/DemoStepper.jsx";
 import ProjectUploader from "./components/ProjectUploader.jsx";
+import AISolutionLab from "./components/AISolutionLab.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -30,11 +31,16 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([loadProject(), fetchGraph()])
-      .then(([info, g]) => {
+    Promise.all([loadProject(), fetchGraph(), fetchProjectStatus()])
+      .then(([info, g, status]) => {
         if (!cancelled) {
           setProject(info);
           setGraph(g);
+          setActiveProject({
+            name: status.active,
+            port: status.running ? status.port : null,
+            previewPort: status.running ? status.previewPort : null,
+          });
           setLoading(false);
         }
       })
@@ -119,6 +125,20 @@ export default function App() {
     }
   }
 
+  async function onStartPreviewProject() {
+    try {
+      const out = await startUploadedProject();
+      setActiveProject({
+        name: "dynamic_project",
+        port: out.port,
+        previewPort: out.previewPort,
+      });
+      setBanner({ message: `Uploaded project running on port ${out.port}`, issueId: null, tone: "success" });
+    } catch (err) {
+      setBanner({ message: `Could not start uploaded project: ${err.message}`, issueId: null, tone: "error" });
+    }
+  }
+
   /**
    * Run analysis and open the Issues tab.
    * @returns {Promise<void>}
@@ -131,12 +151,7 @@ export default function App() {
       setAnalyzeMode(result.mode);
       setRightTab("issues");
     } catch (err) {
-      setErrors([
-        {
-          endpoint: err.code !== undefined ? String(err.code) : "analyze",
-          message: err.message,
-        },
-      ]);
+      setBanner({ message: `Analyze failed: ${err.message}`, issueId: null, tone: "error" });
     } finally {
       setAnalyzing(false);
     }
@@ -281,6 +296,9 @@ export default function App() {
         >
           {analyzing ? "Analyzing…" : "Analyze"}
         </button>
+        <p className="text-[10px] text-slate-500">
+          Live AI sends relevant code, test, or performance context to Gemini after likely-secret redaction.
+        </p>
       </header>
       {banner !== null && (
         <div className={`flex items-center gap-3 border-b px-4 py-1 text-sm ${
@@ -321,6 +339,7 @@ export default function App() {
               ["preview", "Preview"],
               ["perf", "Perf"],
               ["projects", "Projects"],
+              ["ai", "AI Solution"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -345,10 +364,17 @@ export default function App() {
             )}
             {mainTab === "tests" && <TestLab />}
             {mainTab === "preview" && (
-              <PreviewLab projectName={activeProject.name} previewPort={activeProject.port} />
+              <PreviewLab
+                projectName={activeProject.name}
+                previewPort={activeProject.previewPort ?? activeProject.port}
+                onStart={onStartPreviewProject}
+              />
             )}
-            {mainTab === "perf" && <PerfLab />}
+            {mainTab === "perf" && (
+              <PerfLab projectName={activeProject.name} projectRunning={activeProject.name === "shop-api" || activeProject.port !== null} />
+            )}
             {mainTab === "projects" && <ProjectUploader onProjectChange={onProjectChange} />}
+            {mainTab === "ai" && <AISolutionLab />}
           </div>
         </main>
         <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">
