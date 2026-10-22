@@ -216,3 +216,43 @@ export const TestRunResultSchema = z.object({
   duration_ms: z.number(),
   tests: z.array(SingleTestResultSchema),
 });
+
+/**
+ * @typedef {Object} PerfLatency
+ * @property {number} p50
+ * @property {number} p95
+ * @property {number} p99
+ */
+
+/**
+ * @typedef {Object} PerfResult
+ * @property {string} id
+ * @property {string} endpoint
+ * @property {number} concurrency
+ * @property {number} duration
+ * @property {number} rps
+ * @property {PerfLatency} latency
+ * @property {number} totalRequests
+ * @property {number} errors
+ * @property {number} errorRate
+ * @property {string} timestamp
+ */
+
+export const PerfLatencySchema = z.object({
+  p50: z.number(),
+  p95: z.number(),
+  p99: z.number(),
+});
+
+export const PerfResultSchema = z.object({
+  id: z.string(),
+  endpoint: z.string(),
+  concurrency: z.number(),
+  duration: z.number(),
+  rps: z.number(),
+  latency: PerfLatencySchema,
+  totalRequests: z.number(),
+  errors: z.number(),
+  errorRate: z.number(),
+  timestamp: z.string(),
+});

@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import ReactFlow, { Background, Controls } from "reactflow";
+import dagre from "dagre";
 import "reactflow/dist/style.css";
 
-const COL_X = 260;
-const ROW_Y = 90;
+const NODE_W = 200;
+const NODE_H = 50;
 
 /**
  * Style a graph node by its backend node type.
@@ -139,33 +140,35 @@ export default function CodeGraph({
   }, [visible, q]);
 
   const flowNodes = useMemo(() => {
-    const byDepth = new Map();
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: "LR", nodesep: 50, ranksep: 100 });
+    g.setDefaultEdgeLabel(() => ({}));
     for (const n of visible) {
-      const d = n.depth ?? 0;
-      if (!byDepth.has(d)) {
-        byDepth.set(d, []);
+      g.setNode(n.id, { width: NODE_W, height: NODE_H });
+    }
+    for (const e of edges) {
+      if (g.hasNode(e.source) && g.hasNode(e.target)) {
+        g.setEdge(e.source, e.target);
       }
-      byDepth.get(d).push(n);
     }
-    const out = [];
-    for (const [d, group] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
-      group.forEach((n, i) => {
-        const dimmed =
-          (neighborIds !== null && !neighborIds.has(n.id)) ||
-          (matchIds !== null && !matchIds.has(n.id));
-        out.push({
-          id: n.id,
-          data: { label: n.id },
-          position: { x: d * COL_X, y: i * ROW_Y },
-          style: {
-            ...styleFor(n, selectedNodeId === n.id, dimmed),
-            boxShadow: selectedNodeId === n.id ? "0 0 0 3px #38bdf8" : undefined,
-          },
-        });
-      });
-    }
-    return out;
-  }, [visible, neighborIds, matchIds, selectedNodeId]);
+    dagre.layout(g);
+    return visible.map((n) => {
+      const pos = g.node(n.id);
+      const dimmed =
+        (neighborIds !== null && !neighborIds.has(n.id)) ||
+        (matchIds !== null && !matchIds.has(n.id));
+      return {
+        id: n.id,
+        data: { label: n.id },
+        position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
+        style: {
+          width: NODE_W,
+          ...styleFor(n, selectedNodeId === n.id, dimmed),
+          boxShadow: selectedNodeId === n.id ? "0 0 0 3px #38bdf8" : undefined,
+        },
+      };
+    });
+  }, [visible, edges, neighborIds, matchIds, selectedNodeId]);
 
   const flowEdges = useMemo(
     () =>

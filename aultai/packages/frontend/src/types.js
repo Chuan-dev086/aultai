@@ -103,4 +103,25 @@
  * @property {SingleTestResult[]} tests
  */
 
+/**
+ * @typedef {Object} PerfLatency
+ * @property {number} p50
+ * @property {number} p95
+ * @property {number} p99
+ */
+
+/**
+ * @typedef {Object} PerfResult
+ * @property {string} id
+ * @property {string} endpoint
+ * @property {number} concurrency
+ * @property {number} duration
+ * @property {number} rps
+ * @property {PerfLatency} latency
+ * @property {number} totalRequests
+ * @property {number} errors
+ * @property {number} errorRate
+ * @property {string} timestamp
+ */
+
 export {};

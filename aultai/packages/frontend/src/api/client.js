@@ -162,3 +162,37 @@ export async function runTests() {
   }
   return res.json();
 }
+
+/**
+ * Run a load test against the local backend.
+ * @param {object} config
+ * @param {string} [config.endpoint]
+ * @param {string} [config.method]
+ * @param {object} [config.payload]
+ * @param {number} [config.concurrency]
+ * @param {number} [config.duration]
+ * @returns {Promise<import("../types.js").PerfResult>} Perf numbers.
+ */
+export async function runPerfTest(config) {
+  const res = await fetch(`${BASE}/perf/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(config ?? {}),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "runPerfTest");
+  }
+  return res.json();
+}
+
+/**
+ * Fetch the most recent load-test result.
+ * @returns {Promise<import("../types.js").PerfResult>} Last perf numbers.
+ */
+export async function fetchLastPerf() {
+  const res = await fetch(`${BASE}/perf/last`);
+  if (!res.ok) {
+    await throwApiError(res, "fetchLastPerf");
+  }
+  return res.json();
+}

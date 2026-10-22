@@ -6,6 +6,7 @@ import { graphRouter } from "./routes/graph.js";
 import { analysisRouter } from "./routes/analysis.js";
 import { fixesRouter } from "./routes/fixes.js";
 import { testsRouter } from "./routes/tests.js";
+import { perfRouter } from "./routes/perf.js";
 import { apiRouter as shopApiRouter } from "../../workspace/shop-api/src/api.js";
 
 export const app = express();
@@ -21,6 +22,7 @@ app.use("/api", graphRouter);
 app.use("/api", analysisRouter);
 app.use("/api", fixesRouter);
 app.use("/api", testsRouter);
+app.use("/api", perfRouter);
 
 // Full-Stack Preview: serve the shop-api demo page and routes from the
 // AultAI backend so the Preview tab works with a single server on :3000.

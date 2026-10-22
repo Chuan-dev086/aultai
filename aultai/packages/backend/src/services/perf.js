@@ -1,1 +1,155 @@
-// Phase 0 placeholder — perf service lands in a later phase.
+import { randomUUID } from "node:crypto";
+import autocannon from "autocannon";
+import { PORT } from "../config.js";
+
+/**
+ * @typedef {import("../models.js").PerfResult} PerfResult
+ */
+
+/** @type {PerfResult[]} In-memory history of the last runs (max 10). */
+const history = [];
+
+const DEFAULT_PAYLOAD = {
+  cart: { items: [{ productId: "p1", quantity: 1 }] },
+  voucher: {
+    code: "MINUS50",
+    type: "fixed",
+    value: 50,
+    expiresAt: null,
+    minSpend: 0,
+  },
+};
+
+/**
+ * Run a load test against the local backend (which also serves /shop-api).
+ * @param {object} [opts]
+ * @param {string} [opts.endpoint] Path under http://localhost:PORT.
+ * @param {string} [opts.method] HTTP method.
+ * @param {object | null} [opts.payload] JSON body for POST/PUT.
+ * @param {number} [opts.concurrency] Simultaneous connections.
+ * @param {number} [opts.duration] Test duration in seconds.
+ * @returns {Promise<PerfResult>} Aggregated perf numbers.
+ */
+export async function runLoadTest(opts = {}) {
+  const endpoint = opts.endpoint ?? "/shop-api/cart/checkout";
+  const method = (opts.method ?? "POST").toUpperCase();
+  const payload = opts.payload === undefined ? DEFAULT_PAYLOAD : opts.payload;
+  const concurrency = clampInt(opts.concurrency ?? 10, 1, 500);
+  const duration = clampInt(opts.duration ?? 5, 1, 60);
+  const url = `http://localhost:${PORT}${endpoint}`;
+  const result = await runAutocannon({ url, method, payload, concurrency, duration });
+  const totalRequests = result.requests?.total ?? 0;
+  const errors = result.errors ?? 0;
+  const perf = {
+    id: randomUUID(),
+    endpoint,
+    concurrency,
+    duration,
+    rps: Math.round((result.requests?.average ?? 0) * 100) / 100,
+    latency: {
+      // NOTE: autocannon v7 histograms expose p50/p75/p90/p97_5/p99 (no p95
+      // bucket), so p50/p95/p99 are interpolated between bracketing buckets.
+      p50: quantile(result.latency, 50),
+      p95: quantile(result.latency, 95),
+      p99: quantile(result.latency, 99),
+    },
+    totalRequests,
+    errors,
+    errorRate: totalRequests === 0 ? 0 : Math.round((errors / totalRequests) * 10000) / 100,
+    timestamp: new Date().toISOString(),
+  };
+  history.push(perf);
+  if (history.length > 10) {
+    history.splice(0, history.length - 10);
+  }
+  return perf;
+}
+
+/**
+ * Return the most recent load-test result, if any.
+ * @returns {PerfResult | null} The last run or null.
+ */
+export function getLastRun() {
+  return history.length === 0 ? null : history[history.length - 1];
+}
+
+/**
+ * Run autocannon programmatically and resolve with its result object.
+ * @param {object} args
+ * @param {string} args.url Full target URL.
+ * @param {string} args.method HTTP method.
+ * @param {object | null} args.payload JSON body (for methods with a body).
+ * @param {number} args.concurrency Connections.
+ * @param {number} args.duration Seconds.
+ * @returns {Promise<object>} Raw autocannon result.
+ * @throws {Error} When autocannon emits an error.
+ */
+function runAutocannon({ url, method, payload, concurrency, duration }) {
+  return new Promise((resolve, reject) => {
+    const opts = { url, method, connections: concurrency, duration };
+    if (payload !== null && payload !== undefined && method !== "GET" && method !== "HEAD") {
+      opts.body = JSON.stringify(payload);
+      opts.headers = { "content-type": "application/json" };
+    }
+    const instance = autocannon(opts);
+    instance.on("done", (result) => resolve(result));
+    instance.on("error", (err) => reject(err));
+  });
+}
+
+/**
+ * Clamp a value to an integer range, falling back to the minimum.
+ * @param {unknown} value Raw value.
+ * @param {number} min Minimum (also the fallback).
+ * @param {number} max Maximum.
+ * @returns {number} Clamped integer.
+ */
+function clampInt(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/**
+ * Estimate a latency percentile by linear interpolation between autocannon's
+ * histogram buckets (p50, p75, p90, p97_5, p99, p99_9, ...).
+ * @param {object | undefined} latency Autocannon latency object.
+ * @param {number} pct Desired percentile (e.g. 95).
+ * @returns {number} Interpolated ms value rounded to 2 decimals.
+ */
+function quantile(latency, pct) {
+  const table = [
+    [50, latency?.p50],
+    [75, latency?.p75],
+    [90, latency?.p90],
+    [97.5, latency?.p97_5],
+    [99, latency?.p99],
+    [99.9, latency?.p99_9],
+  ].filter(([, v]) => typeof v === "number");
+  if (table.length === 0) {
+    return 0;
+  }
+  if (pct <= table[0][0]) {
+    return round2(table[0][1]);
+  }
+  for (let i = 1; i < table.length; i += 1) {
+    if (pct <= table[i][0]) {
+      const [p0, v0] = table[i - 1];
+      const [p1, v1] = table[i];
+      const t = (pct - p0) / (p1 - p0);
+      return round2(v0 + (v1 - v0) * t);
+    }
+  }
+  return round2(table[table.length - 1][1]);
+}
+
+/**
+ * Round to 2 decimals.
+ * @param {number} n Value.
+ * @returns {number} Rounded value.
+ */
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}

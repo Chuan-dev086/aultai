@@ -7,6 +7,8 @@ import IssuesPanel from "./components/IssuesPanel.jsx";
 import FixReview from "./components/FixReview.jsx";
 import TestLab from "./components/TestLab.jsx";
 import PreviewLab from "./components/PreviewLab.jsx";
+import PerfLab from "./components/PerfLab.jsx";
+import DemoStepper from "./components/DemoStepper.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -110,6 +112,46 @@ export default function App() {
   }
 
   /**
+   * Guided demo stepper: jump to the tab/action for each step.
+   * @param {string} stepId One of explore|diagnose|review|test|verify.
+   * @returns {Promise<void>}
+   */
+  async function onStepClick(stepId) {
+    if (stepId === "explore") {
+      setMainTab("graph");
+    } else if (stepId === "diagnose") {
+      setMainTab("graph");
+      await onAnalyze();
+    } else if (stepId === "review") {
+      setMainTab("graph");
+      if (issues.length > 0) {
+        setActiveFixIssue(issues[0]);
+      }
+    } else if (stepId === "test") {
+      setMainTab("tests");
+    } else if (stepId === "verify") {
+      setMainTab("preview");
+    }
+  }
+
+  /**
+   * Derive the active stepper step from the current main tab.
+   * @returns {string} Step id matching the visible tab.
+   */
+  function activeStep() {
+    if (mainTab === "tests") {
+      return "test";
+    }
+    if (mainTab === "preview" || mainTab === "perf") {
+      return "verify";
+    }
+    if (activeFixIssue !== null) {
+      return "review";
+    }
+    return "explore";
+  }
+
+  /**
    * Fix applied: close the modal, show a banner, refresh the graph.
    * @param {import("./types.js").Issue} issue The issue that was fixed.
    * @returns {Promise<void>}
@@ -167,16 +209,17 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
-      <header className="flex items-center gap-4 border-b border-slate-800 px-4 py-2">
-        <h1 className="text-lg font-bold">AultAI</h1>
-        <p className="text-xs text-slate-500">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-800 px-4 py-2">
+        <h1 className="shrink-0 text-lg font-bold">AultAI</h1>
+        <DemoStepper activeStep={activeStep()} onStepClick={onStepClick} />
+        <p className="whitespace-nowrap text-xs text-slate-500">
           {project.files.length} files / {project.node_count} nodes / {project.edge_count} edges
         </p>
         <button
           type="button"
           onClick={onAnalyze}
           disabled={analyzing}
-          className="rounded bg-indigo-700 px-3 py-1 text-sm text-white hover:bg-indigo-600 disabled:opacity-50"
+          className="shrink-0 rounded bg-indigo-700 px-3 py-1 text-sm text-white hover:bg-indigo-600 disabled:opacity-50"
         >
           {analyzing ? "Analyzing…" : "Analyze"}
         </button>
@@ -212,6 +255,7 @@ export default function App() {
               ["graph", "Graph"],
               ["tests", "Tests"],
               ["preview", "Preview"],
+              ["perf", "Perf"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -236,6 +280,7 @@ export default function App() {
             )}
             {mainTab === "tests" && <TestLab />}
             {mainTab === "preview" && <PreviewLab />}
+            {mainTab === "perf" && <PerfLab />}
           </div>
         </main>
         <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">
