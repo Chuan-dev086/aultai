@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { explainTestResults, generateTests, runTests } from "../api/client.js";
+import { explainTestResults, generateTests, runGeneratedTests, runTests } from "../api/client.js";
 
 /**
  * TestLab — propose tests, run the active project's suite, and explain results.
@@ -13,6 +13,8 @@ export default function TestLab() {
   const [error, setError] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [explaining, setExplaining] = useState(false);
+  const [runningGenerated, setRunningGenerated] = useState(false);
+  const [generatedTestDirectory, setGeneratedTestDirectory] = useState(null);
 
   /**
    * Generate test suggestions.
@@ -24,10 +26,29 @@ export default function TestLab() {
     try {
       const out = await generateTests();
       setGenerated(out);
+      setGeneratedTestDirectory(null);
     } catch (err) {
       setError(err);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function onRunGenerated() {
+    if (generated === null) {
+      return;
+    }
+    setRunningGenerated(true);
+    setError(null);
+    try {
+      const out = await runGeneratedTests(generated.tests);
+      setResult(out);
+      setGeneratedTestDirectory(out.generatedTestDirectory);
+      setExplanation(null);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setRunningGenerated(false);
     }
   }
 
@@ -92,9 +113,23 @@ export default function TestLab() {
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
             {generated.mode === "live" ? "AI test suggestions" : "Offline mock test suggestions"} ({generated.tests.length})
           </h3>
+          <p className="mb-1 text-xs text-slate-500">
+            Suggestions are not added to your project automatically. Run Tests executes the project’s configured test command.
+          </p>
           <pre className="max-h-64 overflow-y-auto rounded border border-slate-700 bg-slate-950 p-2 font-mono text-xs text-slate-200">
             {generated.tests.map((t) => t.code).join("\n\n")}
           </pre>
+          <p className="mt-2 text-xs text-amber-300">
+            Running generated tests saves and executes AI-generated JavaScript in the active project.
+          </p>
+          <button
+            type="button"
+            onClick={onRunGenerated}
+            disabled={runningGenerated || generated.mode !== "live"}
+            className="mt-2 rounded bg-amber-700 px-3 py-1 text-sm text-white hover:bg-amber-600 disabled:opacity-50"
+          >
+            {runningGenerated ? "Saving and running…" : "Save and Run Generated Tests"}
+          </button>
         </div>
       )}
       {result !== null && (
@@ -102,6 +137,11 @@ export default function TestLab() {
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
             Results: {result.passed}/{result.total} passed ({result.duration_ms}ms)
           </h3>
+          {generatedTestDirectory !== null && (
+            <p className="mb-2 font-mono text-xs text-slate-500">
+              Generated tests saved in {generatedTestDirectory}
+            </p>
+          )}
           <button
             type="button"
             onClick={onExplainResults}
@@ -131,8 +171,13 @@ export default function TestLab() {
             <tbody>
               {result.tests.map((t) => (
                 <tr key={t.name} className="border-t border-slate-800">
-                  <td className="py-1 pr-2 font-mono text-xs text-slate-200" title={t.error ?? ""}>
-                    {t.name}
+                  <td className="py-1 pr-2 font-mono text-xs text-slate-200">
+                    <div>{t.name}</div>
+                    {t.error !== null && (
+                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-red-950/60 p-2 font-mono text-[10px] text-red-300">
+                        {t.error}
+                      </pre>
+                    )}
                   </td>
                   <td
                     className={`py-1 pr-2 text-xs font-semibold ${t.status === "passed" ? "text-green-400" : "text-red-400"}`}

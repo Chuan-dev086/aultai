@@ -10,7 +10,7 @@ import * as parser from "@babel/parser";
  */
 export function parseFile(absPath, workspaceRoot, sourceText) {
   const relFile = toRel(absPath, workspaceRoot);
-  const moduleName = moduleBasename(absPath);
+  const moduleName = moduleBasename(absPath, workspaceRoot);
   const ast = parser.parse(sourceText, {
     sourceType: "module",
     plugins: ["jsx", "classProperties"],
@@ -231,11 +231,11 @@ export function toRel(absPath, workspaceRoot) {
 }
 
 /**
- * Basename of a module without extension (e.g. "checkout" for checkout.js).
+ * Workspace-relative module id without extension.
  * @param {string} absPath Absolute file path.
- * @returns {string} Module basename.
+ * @param {string} workspaceRoot Workspace root.
+ * @returns {string} Unique module id such as "src/checkout".
  */
-export function moduleBasename(absPath) {
-  const base = absPath.split("/").pop().split("\\").pop();
-  return base.replace(/\.(js|jsx)$/, "");
+export function moduleBasename(absPath, workspaceRoot) {
+  return toRel(absPath, workspaceRoot).replace(/\.(js|jsx)$/, "");
 }

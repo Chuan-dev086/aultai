@@ -44,6 +44,8 @@ const MOCK_FIXES = {
   },
 };
 const generatedFixes = new Map();
+const pendingFixes = new Map();
+const FIX_RESPONSE_ATTEMPTS = 2;
 
 /**
  * Generate a fix proposal without modifying project code.
@@ -51,10 +53,10 @@ const generatedFixes = new Map();
  * @returns {Promise<FixProposal>} The fix proposal.
  * @throws {Error} When the issue is unknown, the provider fails, or the patch is invalid.
  */
-export async function generateFix(issueId, suppliedIssue = null) {
+export async function generateFix(issueId, suppliedIssue = null, retry = false) {
   if (isMockMode()) {
     if (getActiveSubdir() !== "shop-api") {
-      const err = new Error("Configure GEMINI_API_KEY to generate fixes for uploaded projects.");
+      const err = new Error("Configure an AI provider and API key to generate fixes for uploaded projects.");
       err.code = "AI_PROVIDER_NOT_CONFIGURED";
       throw err;
     }
@@ -64,13 +66,37 @@ export async function generateFix(issueId, suppliedIssue = null) {
       err.code = "UNKNOWN_ISSUE";
       throw err;
     }
-    return { ...fix, rationaleSteps: [...fix.rationaleSteps], impactedNodes: [...fix.impactedNodes] };
+    return {
+      ...fix,
+      rationaleSteps: [...fix.rationaleSteps],
+      impactedNodes: [...fix.impactedNodes],
+      sourceVerified: true,
+      warning: null,
+    };
   }
   const cacheKey = `${getActiveSubdir()}:${issueId}`;
+  if (retry) {
+    generatedFixes.delete(cacheKey);
+  }
   const cached = generatedFixes.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
+  if (!retry && pendingFixes.has(cacheKey)) {
+    return pendingFixes.get(cacheKey);
+  }
+  const pending = generateLiveFix(issueId, suppliedIssue, cacheKey);
+  pendingFixes.set(cacheKey, pending);
+  try {
+    return await pending;
+  } finally {
+    if (pendingFixes.get(cacheKey) === pending) {
+      pendingFixes.delete(cacheKey);
+    }
+  }
+}
+
+async function generateLiveFix(issueId, suppliedIssue, cacheKey) {
   const analyzed = suppliedIssue === null ? await analyzeProject() : null;
   const issue = suppliedIssue ?? analyzed.issues.find((candidate) => candidate.id === issueId);
   if (issue === undefined || issue.id !== issueId || issue.file?.startsWith(`${getActiveSubdir()}/`) !== true) {
@@ -79,32 +105,41 @@ export async function generateFix(issueId, suppliedIssue = null) {
     throw err;
   }
   const source = await readFile(issue.file);
-  const result = await requestAI({
-    task: "fix",
-    context: {
-      project: getActiveSubdir(),
-      file: issue.file,
-      source,
-      issue: {
-        title: issue.title,
-        severity: issue.severity,
-        evidence: issue.evidence,
-        explanation: issue.explanation,
-        suggested_action: issue.suggested_action,
-      },
-    },
-  });
-  if (
-    typeof result.originalCode !== "string" ||
-    result.originalCode.length === 0 ||
-    !source.includes(result.originalCode) ||
-    typeof result.proposedCode !== "string" ||
-    result.proposedCode.length === 0 ||
-    !Array.isArray(result.rationaleSteps)
-  ) {
-    const err = new Error("The AI returned a patch that does not match the current source. No code was changed.");
-    err.code = "AI_INVALID_RESPONSE";
-    throw err;
+  let result;
+  let sourceVerified = false;
+  let validationFeedback = null;
+  for (let attempt = 1; attempt <= FIX_RESPONSE_ATTEMPTS; attempt += 1) {
+    try {
+      result = await requestAI({
+        task: "fix",
+        context: {
+          project: getActiveSubdir(),
+          file: issue.file,
+          source,
+          issue: {
+            title: issue.title,
+            severity: issue.severity,
+            evidence: issue.evidence,
+            explanation: issue.explanation,
+            suggested_action: issue.suggested_action,
+          },
+          ...(validationFeedback === null ? {} : { validationFeedback }),
+        },
+      });
+    } catch (err) {
+      if (err.code !== "AI_INVALID_RESPONSE" || attempt === FIX_RESPONSE_ATTEMPTS) {
+        throw err;
+      }
+      validationFeedback = "Your previous response did not contain all required fix fields. Return the complete JSON object exactly in the requested schema.";
+      console.warn(`[ai] ${JSON.stringify({ event: "fix_response_retry", issueId, attempt, reason: "invalid_response_shape" })}`);
+      continue;
+    }
+    sourceVerified = countOccurrences(source, result.originalCode) === 1;
+    if (sourceVerified || attempt === FIX_RESPONSE_ATTEMPTS) {
+      break;
+    }
+    validationFeedback = "The originalCode from your previous response was not an exact unique substring of the supplied source. Copy an exact contiguous source snippet verbatim, including punctuation and whitespace, and make the proposedCode replace only that snippet.";
+    console.warn(`[ai] ${JSON.stringify({ event: "fix_response_retry", issueId, attempt, reason: "source_mismatch" })}`);
   }
   const proposal = {
     id: `fix-${issue.id}`,
@@ -113,12 +148,19 @@ export async function generateFix(issueId, suppliedIssue = null) {
     originalCode: result.originalCode,
     proposedCode: result.proposedCode,
     unifiedDiff: makeDiff(issue.file, result.originalCode, result.proposedCode),
-    explanation: typeof result.explanation === "string" ? result.explanation : issue.explanation,
+    explanation: result.explanation.trim().length === 0 ? issue.explanation : result.explanation,
     rationaleSteps: result.rationaleSteps.filter((step) => typeof step === "string"),
     impactedNodes: [issue.node_id],
     risk: ["low", "medium", "high"].includes(result.risk) ? result.risk : "medium",
+    sourceVerified,
+    warning: sourceVerified
+      ? null
+      : "The AI's originalCode did not exactly and uniquely match the current file after retrying. Review only; applying this proposal is disabled.",
   };
   generatedFixes.set(cacheKey, proposal);
+  if (!sourceVerified) {
+    console.warn(`[ai] ${JSON.stringify({ event: "fix_proposal_unverified", issueId })}`);
+  }
   return proposal;
 }
 
@@ -131,6 +173,11 @@ export async function generateFix(issueId, suppliedIssue = null) {
  */
 export async function applyFix(issueId) {
   const fix = await generateFix(issueId);
+  if (!fix.sourceVerified) {
+    const err = new Error("This proposal is unverified because its original code does not match the current file. It cannot be applied.");
+    err.code = "PATCH_CONFLICT";
+    throw err;
+  }
   const current = await readFile(fix.file);
   const first = current.indexOf(fix.originalCode);
   if (first === -1 || first !== current.lastIndexOf(fix.originalCode)) {
@@ -138,6 +185,7 @@ export async function applyFix(issueId) {
     err.code = "PATCH_CONFLICT";
     throw err;
   }
+
   const backupAbs = await safePath(`${fix.file}.bak`);
   try {
     await fs.stat(backupAbs);
@@ -176,6 +224,19 @@ export async function revertFix(issueId) {
   await writeFile(fix.file, backup);
   await fs.unlink(bakAbs);
   return { reverted: true };
+}
+
+function countOccurrences(source, search) {
+  if (typeof search !== "string" || search.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  let offset = 0;
+  while ((offset = source.indexOf(search, offset)) !== -1) {
+    count += 1;
+    offset += search.length;
+  }
+  return count;
 }
 
 function makeDiff(file, originalCode, proposedCode) {

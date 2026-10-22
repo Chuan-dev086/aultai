@@ -8,6 +8,9 @@ import {
   stopProject,
   switchToShopApi,
   projectStatus,
+  listUploadedProjects,
+  activateUploadedProject,
+  deleteUploadedProject,
 } from "../services/projectManager.js";
 
 export const projectRouter = Router();
@@ -101,4 +104,43 @@ projectRouter.post("/project/switch", (req, res) => {
  */
 projectRouter.get("/project/status", (req, res) => {
   res.json(projectStatus());
+});
+
+/**
+ * List uploaded projects managed by AultAI.
+ */
+projectRouter.get("/project/uploads", async (_req, res) => {
+  try {
+    res.json({ projects: await listUploadedProjects() });
+  } catch (err) {
+    res.status(500).json({ error: { code: "PROJECT_LIST_FAILED", message: err.message } });
+  }
+});
+
+/**
+ * Activate one saved upload as the current workspace.
+ */
+projectRouter.post("/project/uploads/:id/open", async (req, res) => {
+  try {
+    res.json(await activateUploadedProject(req.params.id));
+  } catch (err) {
+    const status = err.code === "INVALID_PROJECT_ID" ? 400
+      : err.code === "PROJECT_NOT_FOUND" ? 404
+        : 500;
+    res.status(status).json({ error: { code: err.code ?? "PROJECT_OPEN_FAILED", message: err.message } });
+  }
+});
+
+/**
+ * Delete a selected uploaded project directory.
+ */
+projectRouter.delete("/project/uploads/:id", async (req, res) => {
+  try {
+    res.json(await deleteUploadedProject(req.params.id));
+  } catch (err) {
+    const status = err.code === "INVALID_PROJECT_ID" ? 400
+      : err.code === "PROJECT_NOT_FOUND" ? 404
+        : 500;
+    res.status(status).json({ error: { code: err.code ?? "PROJECT_DELETE_FAILED", message: err.message } });
+  }
 });

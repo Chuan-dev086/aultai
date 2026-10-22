@@ -73,6 +73,8 @@ import { z } from "zod";
  * @property {string[]} rationaleSteps
  * @property {string[]} impactedNodes
  * @property {"low" | "medium" | "high"} risk
+ * @property {boolean} sourceVerified
+ * @property {string | null} warning
  */
 
 /**
@@ -183,6 +185,8 @@ export const FixProposalSchema = z.object({
   rationaleSteps: z.array(z.string()),
   impactedNodes: z.array(z.string()),
   risk: z.enum(["low", "medium", "high"]),
+  sourceVerified: z.boolean(),
+  warning: z.string().nullable(),
 });
 
 export const AISolutionRequestSchema = z.object({

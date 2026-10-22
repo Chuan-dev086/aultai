@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import nodeFs from "node:fs";
 import path from "node:path";
 import { WORKSPACE_DIR } from "../config.js";
 
@@ -8,6 +9,8 @@ import { WORKSPACE_DIR } from "../config.js";
 export const KNOWN_WORKSPACES = ["shop-api", "dynamic_project"];
 
 const ACTIVE = { subdir: "shop-api" };
+const ACTIVE_PROJECT_FILE = path.resolve(WORKSPACE_DIR, ".aultai-active-project");
+let dynamicWorkspaceSubdir = loadDynamicWorkspaceSubdir();
 
 /**
  * Return the absolute path of the currently active workspace directory.
@@ -15,7 +18,60 @@ const ACTIVE = { subdir: "shop-api" };
  * @returns {string} Absolute workspace path.
  */
 export function getActiveWorkspace() {
-  return path.resolve(WORKSPACE_DIR, ACTIVE.subdir);
+  return getWorkspacePath(ACTIVE.subdir);
+}
+
+/**
+ * Return the physical directory for a logical workspace.
+ * @param {string} subdir Workspace name.
+ * @returns {string} Absolute workspace path.
+ */
+export function getWorkspacePath(subdir) {
+  if (subdir === "dynamic_project") {
+    return path.resolve(WORKSPACE_DIR, dynamicWorkspaceSubdir);
+  }
+  return path.resolve(WORKSPACE_DIR, subdir);
+}
+
+/**
+ * Make a completed uploaded-project directory the active dynamic workspace.
+ * @param {string} subdir WORKSPACE_DIR-relative path inside .dynamic-projects.
+ * @returns {Promise<void>}
+ */
+export async function setDynamicWorkspace(subdir) {
+  const normalized = path.posix.normalize(subdir.replace(/\\/g, "/"));
+  if (!/^\.dynamic-projects\/[0-9a-f-]+$/.test(normalized)) {
+    throw pathTraversal("Invalid uploaded project directory");
+  }
+  const candidate = path.resolve(WORKSPACE_DIR, ...normalized.split("/"));
+  const relative = path.relative(path.resolve(WORKSPACE_DIR), candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw pathTraversal("Uploaded project directory is outside the workspace");
+  }
+  await fs.stat(candidate);
+  await fs.writeFile(ACTIVE_PROJECT_FILE, normalized, "utf8");
+  dynamicWorkspaceSubdir = normalized;
+}
+
+/**
+ * Return the physical uploaded-project directory selected for dynamic_project.
+ * @returns {string} Workspace-relative upload directory.
+ */
+export function getDynamicWorkspaceSubdir() {
+  return dynamicWorkspaceSubdir;
+}
+
+/**
+ * Clear the selected upload and restore the legacy dynamic_project directory.
+ * @returns {Promise<void>}
+ */
+export async function resetDynamicWorkspace() {
+  try {
+    await fs.unlink(ACTIVE_PROJECT_FILE);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  dynamicWorkspaceSubdir = "dynamic_project";
 }
 
 /**
@@ -55,23 +111,42 @@ export async function safePath(rel) {
     throw pathTraversal(`Invalid workspace path: ${JSON.stringify(rel)}`);
   }
   const root = path.resolve(WORKSPACE_DIR);
-  const candidate = path.resolve(root, rel);
-  if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+  const logicalCandidate = path.resolve(root, rel);
+  if (logicalCandidate !== root && !logicalCandidate.startsWith(root + path.sep)) {
     throw pathTraversal(`Path escapes workspace: ${rel}`);
   }
-  let real = candidate;
-  try {
-    real = await fs.realpath(candidate);
-  } catch (err) {
-    if (err.code !== "ENOENT") {
-      throw err;
-    }
-  }
+  const logicalRelative = path.relative(root, logicalCandidate);
+  const segments = logicalRelative.split(path.sep);
+  const candidate = segments[0] === "dynamic_project"
+    ? path.resolve(getWorkspacePath("dynamic_project"), ...segments.slice(1))
+    : logicalCandidate;
+  const real = await resolveRealPath(candidate);
   const realRoot = await fs.realpath(root);
-  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+  const realRelative = path.relative(realRoot, real);
+  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
     throw pathTraversal(`Symlink escapes workspace: ${rel}`);
   }
   return candidate;
+}
+
+async function resolveRealPath(candidate) {
+  let current = candidate;
+  const missingSegments = [];
+  for (;;) {
+    try {
+      return path.resolve(await fs.realpath(current), ...missingSegments);
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        throw err;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw err;
+      }
+      missingSegments.unshift(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 /**
@@ -107,8 +182,28 @@ export async function listJsFiles(rel) {
   const out = [];
   await walk(abs, abs, out);
   out.sort();
-  const root = path.resolve(WORKSPACE_DIR);
-  return out.map((f) => path.relative(root, f).split(path.sep).join("/"));
+  const logicalRoot = rel === "." ? "" : rel.replace(/[\\/]+$/, "");
+  return out.map((file) => {
+    const relative = path.relative(abs, file).split(path.sep).join("/");
+    if (logicalRoot === "dynamic_project" || logicalRoot.startsWith("dynamic_project/")) {
+      return `${logicalRoot}/${relative}`;
+    }
+    return path.relative(path.resolve(WORKSPACE_DIR), file).split(path.sep).join("/");
+  });
+}
+
+function loadDynamicWorkspaceSubdir() {
+  try {
+    const subdir = nodeFs.readFileSync(ACTIVE_PROJECT_FILE, "utf8").trim();
+    if (/^\.dynamic-projects\/[0-9a-f-]+$/.test(subdir)) {
+      return subdir;
+    }
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      throw err;
+    }
+  }
+  return "dynamic_project";
 }
 
 /**

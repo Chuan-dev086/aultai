@@ -113,7 +113,18 @@ export async function generateTests() {
   if (tests.length === 0) {
     throw testGenError("AI_INVALID_RESPONSE", "The AI did not return any valid test cases.");
   }
-  return { tests, mode: "live" };
+  const runnableTests = tests.filter((item) =>
+    /node:test/.test(item.code) &&
+    /node:assert\/strict/.test(item.code) &&
+    /\b(?:test|it)\s*\(/.test(item.code),
+  );
+  if (runnableTests.length === 0) {
+    throw testGenError(
+      "AI_INVALID_RESPONSE",
+      "The AI did not return runnable Node.js test files. Retry Generate Tests.",
+    );
+  }
+  return { tests: runnableTests, mode: "live" };
 }
 
 function testGenError(code, message) {

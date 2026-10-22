@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import nodeFs from "node:fs";
@@ -8,7 +9,14 @@ import { pipeline } from "node:stream/promises";
 import unzipper from "unzipper";
 import treeKill from "tree-kill";
 import { WORKSPACE_DIR } from "../config.js";
-import { getActiveSubdir, setActiveWorkspace } from "./sandbox.js";
+import {
+  getActiveSubdir,
+  getDynamicWorkspaceSubdir,
+  getWorkspacePath,
+  resetDynamicWorkspace,
+  setActiveWorkspace,
+  setDynamicWorkspace,
+} from "./sandbox.js";
 import { stopTestsForProject } from "./testrunner.js";
 
 /**
@@ -33,15 +41,16 @@ let dynamicPreviewPort = null;
 let dynamicStarting = null;
 
 /**
- * Extract the selected project from an uploaded ZIP directly into
- * packages/workspace/dynamic_project, avoiding directory moves on Windows.
+ * Extract each uploaded project into a fresh managed directory, then switch
+ * the logical dynamic_project workspace to it without deleting locked files.
  * @param {string} zipFilePath Absolute path of the uploaded zip on disk.
  * @returns {Promise<{ success: true, message: string, path: string }>} Result.
  * @throws {Error} When the zip is invalid or has no unambiguous project root.
  */
 export async function uploadProject(zipFilePath) {
-  const target = path.resolve(WORKSPACE_DIR, DYNAMIC_SUBDIR);
-  let targetCleared = false;
+  const targetSubdir = path.join(".dynamic-projects", randomUUID());
+  const target = path.resolve(WORKSPACE_DIR, targetSubdir);
+  let targetCreated = false;
   try {
     if (dynamicStarting !== null) {
       await dynamicStarting;
@@ -50,15 +59,15 @@ export async function uploadProject(zipFilePath) {
     if (dynamicChild !== null) {
       await stopProject();
     }
-    await removeDirectoryWithRetry(target);
-    targetCleared = true;
+    targetCreated = true;
     await fs.mkdir(target, { recursive: true });
     const archive = await unzipper.Open.file(zipFilePath);
     await extractArchive(archive, target);
     await prepareEmbeddedLauncher(target);
+    await setDynamicWorkspace(targetSubdir);
   } catch (err) {
     let cleanupMessage = "";
-    if (targetCleared) {
+    if (targetCreated) {
       try {
         await removeDirectoryWithRetry(target);
       } catch (cleanupErr) {
@@ -79,6 +88,150 @@ export async function uploadProject(zipFilePath) {
 }
 
 /**
+ * List valid uploaded project directories managed by AultAI.
+ * @returns {Promise<Array<{ id: string, name: string, uploadedAt: string, current: boolean }>>}
+ */
+export async function listUploadedProjects() {
+  const uploadsDir = path.join(WORKSPACE_DIR, ".dynamic-projects");
+  let entries;
+  try {
+    entries = await fs.readdir(uploadsDir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const currentSubdir = getDynamicWorkspaceSubdir();
+  const projects = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isUploadId(entry.name)) continue;
+    const projectDir = path.join(uploadsDir, entry.name);
+    const info = await fs.stat(projectDir);
+    let name = entry.name;
+    try {
+      const manifest = JSON.parse(await fs.readFile(path.join(projectDir, "package.json"), "utf8"));
+      if (manifest !== null && typeof manifest === "object" &&
+        typeof manifest.name === "string" && manifest.name.trim() !== "") {
+        name = manifest.name.trim();
+      }
+    } catch (err) {
+      if (err.code !== "ENOENT" && !(err instanceof SyntaxError)) throw err;
+    }
+    projects.push({
+      id: entry.name,
+      name,
+      uploadedAt: info.birthtime.toISOString(),
+      current: currentSubdir === path.posix.join(".dynamic-projects", entry.name),
+    });
+  }
+  return projects.sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt));
+}
+
+/**
+ * Select a saved upload as the active dynamic workspace.
+ * @param {string} id UUID directory name of the upload.
+ * @returns {Promise<{ active: string, projectId: string }>}
+ */
+export async function activateUploadedProject(id) {
+  if (!isUploadId(id)) {
+    throw projectManagementError("Invalid uploaded project id.", "INVALID_PROJECT_ID");
+  }
+  const targetSubdir = path.posix.join(".dynamic-projects", id);
+  const target = path.resolve(WORKSPACE_DIR, ".dynamic-projects", id);
+  try {
+    const info = await fs.stat(target);
+    if (!info.isDirectory()) {
+      throw projectManagementError("Uploaded project was not found.", "PROJECT_NOT_FOUND");
+    }
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      throw projectManagementError("Uploaded project was not found.", "PROJECT_NOT_FOUND");
+    }
+    throw err;
+  }
+
+  if (dynamicStarting !== null) await dynamicStarting;
+  await stopTestsForProject(DYNAMIC_SUBDIR);
+  if (dynamicChild !== null) await stopProject();
+  await setDynamicWorkspace(targetSubdir);
+  setActiveWorkspace(DYNAMIC_SUBDIR);
+  return { active: DYNAMIC_SUBDIR, projectId: id };
+}
+
+/**
+ * Delete one managed upload. The current upload is stopped and detached first.
+ * @param {string} id UUID directory name of the upload.
+ * @returns {Promise<{ deleted: string, active: string, workspaceChanged: boolean }>}
+ */
+export async function deleteUploadedProject(id) {
+  if (!isUploadId(id)) {
+    throw projectManagementError("Invalid uploaded project id.", "INVALID_PROJECT_ID");
+  }
+  const targetSubdir = path.posix.join(".dynamic-projects", id);
+  const target = path.resolve(WORKSPACE_DIR, ".dynamic-projects", id);
+  const currentSubdir = getDynamicWorkspaceSubdir();
+  const isCurrent = currentSubdir === targetSubdir;
+  const previousActive = getActiveSubdir();
+  let entries;
+  try {
+    entries = await fs.readdir(path.dirname(target), { withFileTypes: true });
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      throw projectManagementError("Uploaded project was not found.", "PROJECT_NOT_FOUND");
+    }
+    throw err;
+  }
+  if (!entries.some((entry) => entry.isDirectory() && entry.name === id)) {
+    throw projectManagementError("Uploaded project was not found.", "PROJECT_NOT_FOUND");
+  }
+
+  let workspaceChanged = false;
+  if (isCurrent) {
+    if (dynamicStarting !== null) await dynamicStarting;
+    await stopTestsForProject(DYNAMIC_SUBDIR);
+    if (dynamicChild !== null) await stopProject();
+    if (previousActive === DYNAMIC_SUBDIR) {
+      setActiveWorkspace("shop-api");
+      workspaceChanged = true;
+    }
+
+    const replacement = entries.find(
+      (entry) => entry.isDirectory() && isUploadId(entry.name) && entry.name !== id,
+    );
+    if (replacement === undefined) {
+      await resetDynamicWorkspace();
+    } else {
+      await setDynamicWorkspace(path.posix.join(".dynamic-projects", replacement.name));
+    }
+  }
+
+  try {
+    await removeDirectoryWithRetry(target);
+  } catch (err) {
+    if (isCurrent) {
+      try {
+        await setDynamicWorkspace(targetSubdir);
+        if (workspaceChanged) setActiveWorkspace(DYNAMIC_SUBDIR);
+      } catch (restoreError) {
+        console.error(`[project] failed to restore upload selection after delete failure: ${restoreError.message}`);
+      }
+    }
+    throw err;
+  }
+  return { deleted: id, active: getActiveSubdir(), workspaceChanged };
+}
+
+function isUploadId(id) {
+  return typeof id === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+function projectManagementError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+/**
  * Remove an uploaded-project directory, retrying transient Windows file locks.
  * @param {string} directory Absolute directory path.
  * @param {(directory: string) => Promise<void>} [remove] Removal operation, injectable for tests.
@@ -90,7 +243,7 @@ export async function removeDirectoryWithRetry(
   remove = (target) => fs.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }),
 ) {
   const transientCodes = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EACCES"]);
-  const retries = 60;
+  const retries = 10;
   for (let attempt = 0; ; attempt += 1) {
     try {
       await remove(directory);
@@ -98,9 +251,11 @@ export async function removeDirectoryWithRetry(
     } catch (err) {
       if (!transientCodes.has(err.code) || attempt >= retries) {
         if (transientCodes.has(err.code)) {
-          throw uploadError(
-            `Could not clear the uploaded project because Windows still has files or folders in use (${err.code}). AultAI stopped its managed project and test processes, but another process may still be using dynamic_project.`,
+          const lockError = projectManagementError(
+            `Could not delete the uploaded project because files are still in use (${err.code}). Close any terminals, editors, or project processes using this folder, then retry.`,
+            "PROJECT_FILES_IN_USE",
           );
+          throw lockError;
         }
         throw err;
       }
@@ -250,7 +405,7 @@ function archiveEntrySegments(entryPath) {
  */
 export function installDeps() {
   return new Promise((resolve, reject) => {
-    const cwd = path.resolve(WORKSPACE_DIR, DYNAMIC_SUBDIR);
+    const cwd = getWorkspacePath(DYNAMIC_SUBDIR);
     const child = spawn("npm", ["install", "--workspaces=false", "--no-audit", "--no-fund"], {
       cwd,
       shell: process.platform === "win32",
@@ -318,7 +473,7 @@ export async function startProject() {
  * @throws {Error} When no project exists or it fails to bind.
  */
 async function startDynamicProject() {
-  const cwd = path.resolve(WORKSPACE_DIR, DYNAMIC_SUBDIR);
+  const cwd = getWorkspacePath(DYNAMIC_SUBDIR);
   try {
     await fs.stat(path.join(cwd, "package.json"));
   } catch {

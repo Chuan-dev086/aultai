@@ -73,6 +73,8 @@
  * @property {string[]} rationaleSteps
  * @property {string[]} impactedNodes
  * @property {"low" | "medium" | "high"} risk
+ * @property {boolean} sourceVerified
+ * @property {string | null} warning
  */
 
 /**

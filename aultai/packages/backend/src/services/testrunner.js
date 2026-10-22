@@ -1,8 +1,10 @@
+import { promises as fs } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import treeKill from "tree-kill";
-import { SHOP_API_DIR, WORKSPACE_DIR } from "../config.js";
-import { getActiveSubdir } from "./sandbox.js";
+import { SHOP_API_DIR } from "../config.js";
+import { getActiveSubdir, getWorkspacePath } from "./sandbox.js";
 
 /**
  * @typedef {Object} SingleTestResult
@@ -27,18 +29,24 @@ let lastTestRun = null;
 const activeTestRuns = new Map();
 
 /**
- * Run the shop-api Vitest suite in a child process with --reporter=json.
+ * Run the shop-api Vitest suite in a child process with --reporter=json and
+ * thread workers, avoiding Vitest's Windows child-process serialization issue.
  * Never runs analyzed code in this process.
  * @returns {Promise<TestRunResult>} Parsed per-test results.
  */
-export function runTests() {
+export async function runTests() {
+  const active = getActiveSubdir();
+  const cwd = active === "shop-api" ? path.resolve(SHOP_API_DIR) : getWorkspacePath(active);
+  await ensureTestCommand(cwd);
+
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const active = getActiveSubdir();
-    const args = active === "shop-api" ? ["test", "--", "--reporter=json"] : ["test"];
+    const args = active === "shop-api"
+      ? ["test", "--", "--reporter=json", "--pool=threads"]
+      : ["test"];
     // NOTE: on Windows, npm is a .cmd shim and requires a shell to execute.
     const child = spawn("npm", args, {
-      cwd: active === "shop-api" ? path.resolve(SHOP_API_DIR) : path.resolve(WORKSPACE_DIR, active),
+      cwd,
       shell: process.platform === "win32",
       windowsHide: true,
     });
@@ -109,6 +117,150 @@ export function runTests() {
       }
     });
   });
+}
+
+/**
+ * Save explicitly approved AI-generated Node test modules and execute them.
+ * @param {Array<{ name: string, code: string }>} tests Generated test modules.
+ * @returns {Promise<TestRunResult>} Per-test results.
+ */
+export async function runGeneratedTests(tests) {
+  const active = getActiveSubdir();
+  const cwd = getWorkspacePath(active);
+  const totalBytes = tests.reduce((total, item) => total + Buffer.byteLength(item.code, "utf8"), 0);
+  if (tests.length === 0 || tests.length > 20 || totalBytes > 100000) {
+    throw testConfigurationError("Generated tests must contain 1–20 files and be no larger than 100 KB in total.");
+  }
+  for (const item of tests) {
+    if (
+      typeof item.name !== "string" ||
+      typeof item.code !== "string" ||
+      item.code.length > 10000 ||
+      !/node:test/.test(item.code) ||
+      !/node:assert\/strict/.test(item.code) ||
+      !/\b(?:test|it)\s*\(/.test(item.code)
+    ) {
+      throw testConfigurationError("Each generated test must be a runnable Node.js test module using node:test and strict assertions.");
+    }
+  }
+
+  const testDir = path.join(cwd, ".aultai-tests", randomUUID());
+  await fs.mkdir(testDir, { recursive: true });
+  const filenames = [];
+  for (const [index, item] of tests.entries()) {
+    const filename = `generated-${index + 1}.test.js`;
+    await fs.writeFile(path.join(testDir, filename), item.code, { encoding: "utf8", flag: "wx" });
+    filenames.push(filename);
+  }
+
+  const started = Date.now();
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--test", "--test-reporter=tap", ...filenames.map((filename) => path.join(testDir, filename))],
+      { cwd, windowsHide: true },
+    );
+    const runs = activeTestRuns.get(active) ?? new Set();
+    const run = {
+      child,
+      closed: new Promise((resolveClose) => child.once("close", resolveClose)),
+    };
+    runs.add(run);
+    activeTestRuns.set(active, runs);
+    const removeRun = () => {
+      runs.delete(run);
+      if (runs.size === 0) activeTestRuns.delete(active);
+    };
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      if (child.pid !== undefined) {
+        treeKill(child.pid, (error) => {
+          if (error && error.code !== "ESRCH") {
+            console.error(`[tests] failed to stop generated test process: ${error.message}`);
+          }
+        });
+      }
+      removeRun();
+      reject(testTimeout());
+    }, TIMEOUT_MS);
+    child.stdout.on("data", (chunk) => {
+      stdout = `${stdout}${String(chunk)}`.slice(-OUTPUT_LIMIT);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-OUTPUT_LIMIT);
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      removeRun();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      removeRun();
+      const output = `${stdout}\n${stderr}`.trim();
+      const testsResult = [];
+      const testPattern = /^\s*(ok|not ok)\s+\d+\s+-\s+(.+)$/gm;
+      for (const match of output.matchAll(testPattern)) {
+        testsResult.push({
+          name: match[2].trim(),
+          status: match[1] === "ok" ? "passed" : "failed",
+          duration_ms: 0,
+          error: match[1] === "ok" ? null : output.slice(-2000),
+        });
+      }
+      if (testsResult.length === 0) {
+        testsResult.push({
+          name: "Generated Node.js tests",
+          status: code === 0 ? "passed" : "failed",
+          duration_ms: Date.now() - started,
+          error: code === 0 ? null : output.slice(-2000) || `node --test exited with code ${code}`,
+        });
+      }
+      const failed = testsResult.filter((item) => item.status === "failed").length;
+      resolve({
+        total: testsResult.length,
+        passed: testsResult.length - failed,
+        failed,
+        duration_ms: Date.now() - started,
+        tests: testsResult,
+      });
+    });
+  });
+  lastTestRun = { project: active, result };
+  return { ...result, generatedTestDirectory: path.relative(cwd, testDir).split(path.sep).join("/") };
+}
+
+async function ensureTestCommand(cwd) {
+  let packageText;
+  try {
+    packageText = await fs.readFile(path.join(cwd, "package.json"), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw testConfigurationError(
+        "No package.json was found in the active project, so AultAI cannot run its npm test command.",
+      );
+    }
+    throw error;
+  }
+
+  let packageInfo;
+  try {
+    packageInfo = JSON.parse(packageText);
+  } catch {
+    throw testConfigurationError("The active project's package.json is not valid JSON.");
+  }
+  if (typeof packageInfo.scripts?.test !== "string" || packageInfo.scripts.test.trim() === "") {
+    throw testConfigurationError(
+      'The active project has no "scripts.test" command in package.json. Add a test script before running tests; generated AI suggestions are not added or executed automatically.',
+    );
+  }
+}
+
+function testConfigurationError(message) {
+  const error = new Error(message);
+  error.code = "TEST_COMMAND_NOT_CONFIGURED";
+  return error;
 }
 
 /**

@@ -13,8 +13,11 @@ const IssueIdBody = z.object({ issueId: z.string() });
  */
 fixesRouter.post("/fix", async (req, res) => {
   try {
-    const body = IssueIdBody.extend({ issue: IssueSchema.optional() }).parse(req.body);
-    const proposal = await generateFix(body.issueId, body.issue ?? null);
+    const body = IssueIdBody.extend({
+      issue: IssueSchema.optional(),
+      retry: z.boolean().optional(),
+    }).parse(req.body);
+    const proposal = await generateFix(body.issueId, body.issue ?? null, body.retry ?? false);
     res.json(FixProposalSchema.parse(proposal));
   } catch (err) {
     if (err.code === "UNKNOWN_ISSUE") {

@@ -1,12 +1,20 @@
 import { Router } from "express";
+import { z } from "zod";
 import { generateTests } from "../services/testgen.js";
-import { getLastTestRun, runTests } from "../services/testrunner.js";
+import { getLastTestRun, runGeneratedTests, runTests } from "../services/testrunner.js";
 import { AITestExplanationSchema, GenerateTestsResponseSchema, TestRunResultSchema } from "../models.js";
 import { requestAI } from "../services/aiService.js";
 import { getActiveSubdir } from "../services/sandbox.js";
 import { sendAIError } from "./aiErrors.js";
 
 export const testsRouter = Router();
+
+const GeneratedTestsBody = z.object({
+  tests: z.array(z.object({
+    name: z.string().min(1).max(300),
+    code: z.string().min(1).max(10000),
+  })).min(1).max(20),
+});
 
 /**
  * Return test-case suggestions without writing project files.
@@ -28,7 +36,34 @@ testsRouter.post("/tests/run", async (req, res) => {
     const result = await runTests();
     res.json(TestRunResultSchema.parse(result));
   } catch (err) {
-    res.status(500).json({ error: { code: "RUN_FAILED", message: err.message } });
+    const status = err.code === "TEST_COMMAND_NOT_CONFIGURED" ? 409 : 500;
+    res.status(status).json({ error: { code: err.code ?? "RUN_FAILED", message: err.message } });
+  }
+});
+
+/**
+ * Run generated tests only after the user explicitly approves them in the UI.
+ */
+testsRouter.post("/tests/run-generated", async (req, res) => {
+  const parsed = GeneratedTestsBody.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({
+      error: {
+        code: "INVALID_GENERATED_TESTS",
+        message: parsed.error.issues.map((issue) => issue.message).join("; "),
+      },
+    });
+    return;
+  }
+  try {
+    const result = await runGeneratedTests(parsed.data.tests);
+    res.json({
+      ...TestRunResultSchema.parse(result),
+      generatedTestDirectory: result.generatedTestDirectory,
+    });
+  } catch (err) {
+    const status = err.code === "TEST_COMMAND_NOT_CONFIGURED" ? 400 : 500;
+    res.status(status).json({ error: { code: err.code ?? "RUN_FAILED", message: err.message } });
   }
 });
 

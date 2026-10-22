@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { WORKSPACE_DIR } from "../config.js";
 import { AISolutionSchema } from "../models.js";
-import { getActiveSubdir, readFile, safePath, writeFile } from "./sandbox.js";
+import { getActiveSubdir, getWorkspacePath, readFile, safePath, writeFile } from "./sandbox.js";
 import { requestAI } from "./aiService.js";
 
 const proposals = new Map();
@@ -143,7 +142,7 @@ function normalizeProjectFile(file) {
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     throw aiError("AI_INVALID_REQUEST", "File must be a normalized path inside the active project.");
   }
-  const root = path.resolve(WORKSPACE_DIR, getActiveSubdir());
+  const root = getWorkspacePath(getActiveSubdir());
   const target = path.resolve(root, ...segments);
   if (target !== root && !target.startsWith(root + path.sep)) {
     throw aiError("AI_INVALID_REQUEST", "File must be inside the active project.");

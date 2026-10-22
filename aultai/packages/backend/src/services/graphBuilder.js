@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import traverse from "@babel/traverse";
 import * as babelParser from "@babel/parser";
-import { getActiveSubdir, safePath, listJsFiles, readFile } from "./sandbox.js";
-import { WORKSPACE_DIR } from "../config.js";
+import { getActiveSubdir, getActiveWorkspace, safePath, listJsFiles, readFile } from "./sandbox.js";
 import { parseFile } from "./parser.js";
 
 const walk = traverse.default ?? traverse;
@@ -18,7 +18,7 @@ const walk = traverse.default ?? traverse;
 export async function buildGraph() {
   const active = getActiveSubdir();
   const relFiles = await listJsFiles(active);
-  const root = WORKSPACE_DIR;
+  const root = getActiveWorkspace();
   const nodes = [];
   const files = [];
   const byId = new Map();
@@ -44,6 +44,9 @@ export async function buildGraph() {
       });
       continue;
     }
+    for (const node of parsed.nodes) {
+      node.file = rel;
+    }
     moduleOf.set(parsed.nodes[0].id, parsed.nodes[0].file);
     for (const n of parsed.nodes) {
       nodes.push(n);
@@ -59,7 +62,7 @@ export async function buildGraph() {
     if (n.type === "module") {
       continue;
     }
-    const mod = n.id.split(".")[0];
+    const mod = moduleIdFromFile(n.file, active);
     if (!moduleNames.has(mod)) {
       moduleNames.set(mod, new Map());
     }
@@ -90,16 +93,14 @@ export async function buildGraph() {
     } catch {
       continue;
     }
-    const mod = rel
-      .split("/")
-      .pop()
-      .replace(/\.(js|jsx)$/, "");
+    const mod = moduleIdFromFile(rel, active);
+    const relativeFile = rel.slice(active.length + 1);
     const table = {};
     const selfId = mod;
     walk(ast, {
       ImportDeclaration(p) {
         const src = p.node.source.value;
-        const fromModule = resolveImportToModule(src, mod, moduleNames);
+        const fromModule = resolveImportToModule(src, relativeFile, moduleNames);
         for (const spec of p.node.specifiers) {
           const local = spec.local.name;
           const imported =
@@ -184,7 +185,7 @@ export async function buildGraph() {
     if (n.type === "module" || n.type === "external") {
       continue;
     }
-    const mod = n.id.split(".")[0];
+    const mod = moduleIdFromFile(n.file, active);
     const key = `${mod}\u0000${n.id}\u0000defines`;
     if (seen.has(key)) {
       continue;
@@ -299,16 +300,17 @@ function enclosingFunctionId(fnPath, text, mod) {
  * @param {Map<string, Map<string, string>>} moduleNames Known modules and their defs.
  * @returns {string | null} Target module basename or null when unknown.
  */
-function resolveImportToModule(src, fromMod, moduleNames) {
-  void fromMod;
+function resolveImportToModule(src, fromFile, moduleNames) {
   if (!src.startsWith(".")) {
     return null;
   }
-  const base = src
-    .split("/")
-    .pop()
-    .replace(/\.(js|jsx)$/, "");
-  return moduleNames.has(base) ? base : null;
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), src));
+  const withoutExtension = resolved.replace(/\.(js|jsx)$/, "");
+  const candidates = /\.(js|jsx)$/.test(resolved)
+    ? [withoutExtension]
+    : [resolved, `${resolved}.js`, `${resolved}.jsx`, `${resolved}/index.js`, `${resolved}/index.jsx`]
+      .map((candidate) => candidate.replace(/\.(js|jsx)$/, ""));
+  return candidates.find((candidate) => moduleNames.has(candidate)) ?? null;
 }
 
 /**
@@ -351,4 +353,10 @@ function resolveCall(name, mod, table, byId, moduleNames) {
     }
   }
   return short;
+}
+
+function moduleIdFromFile(file, active) {
+  const prefix = `${active}/`;
+  const relativeFile = file.startsWith(prefix) ? file.slice(prefix.length) : file;
+  return relativeFile.replace(/\.(js|jsx)$/, "");
 }

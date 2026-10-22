@@ -11,6 +11,7 @@ import PerfLab from "./components/PerfLab.jsx";
 import DemoStepper from "./components/DemoStepper.jsx";
 import ProjectUploader from "./components/ProjectUploader.jsx";
 import AISolutionLab from "./components/AISolutionLab.jsx";
+import UploadedProjectManager from "./components/UploadedProjectManager.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -89,6 +90,18 @@ export default function App() {
   }
 
   /**
+   * Navigate from an inspector relationship to its node in the full graph.
+   * @param {string} id Related node id.
+   * @returns {void}
+   */
+  function onRelatedNodeClick(id) {
+    setActiveFile(null);
+    setMainTab("graph");
+    setRightTab("inspector");
+    setSelectedNodeId(id);
+  }
+
+  /**
    * Clear the current node selection (canvas click).
    * @returns {void}
    */
@@ -102,25 +115,39 @@ export default function App() {
    * @returns {Promise<void>}
    */
   async function onProjectChange(info) {
+    setBanner(null);
+    let proj;
+    let g;
+    try {
+      [proj, g] = await Promise.all([loadProject(), fetchGraph()]);
+    } catch (err) {
+      setBanner({
+        message: `Could not load ${info.name}: ${err.message}. The previous project data is still shown.`,
+        issueId: null,
+        tone: "error",
+      });
+      return;
+    }
     setActiveProject(info);
     setActiveFile(null);
     setSelectedNodeId(null);
     setSelectedIssueId(null);
     setActiveFixIssue(null);
+    setMainTab("graph");
+    setProject(proj);
+    setGraph(g);
     setIssues([]);
     setAnalyzeMode(null);
+
     try {
-      const [proj, g, analysis] = await Promise.all([loadProject(), fetchGraph(), analyze()]);
-      setProject(proj);
-      setGraph(g);
+      const analysis = await analyze();
       setIssues(analysis.issues);
       setAnalyzeMode(analysis.mode);
-      setBanner(null);
     } catch (err) {
       setBanner({
-        message: `Could not switch to ${info.name}: ${err.message}. The previous project data is still shown.`,
+        message: `Switched to ${info.name} and loaded its files and graph, but AI analysis failed: ${err.message}. Retry Analyze when the provider is available.`,
         issueId: null,
-        tone: "error",
+        tone: "warning",
       });
     }
   }
@@ -297,8 +324,9 @@ export default function App() {
           {analyzing ? "Analyzing…" : "Analyze"}
         </button>
         <p className="text-[10px] text-slate-500">
-          Live AI sends relevant code, test, or performance context to Gemini after likely-secret redaction.
+          Live AI sends relevant code, test, or performance context to the configured provider after likely-secret redaction.
         </p>
+        <UploadedProjectManager onProjectChange={onProjectChange} />
       </header>
       {banner !== null && (
         <div className={`flex items-center gap-3 border-b px-4 py-1 text-sm ${
@@ -374,7 +402,14 @@ export default function App() {
               <PerfLab projectName={activeProject.name} projectRunning={activeProject.name === "shop-api" || activeProject.port !== null} />
             )}
             {mainTab === "projects" && <ProjectUploader onProjectChange={onProjectChange} />}
-            {mainTab === "ai" && <AISolutionLab />}
+            {mainTab === "ai" && (
+              <AISolutionLab
+                project={project}
+                issues={issues}
+                activeFile={activeFile}
+                projectName={activeProject.name}
+              />
+            )}
           </div>
         </main>
         <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">
@@ -396,7 +431,7 @@ export default function App() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {rightTab === "inspector" ? (
-              <NodeInspector nodeId={selectedNodeId} onNodeClick={onNodeClick} />
+              <NodeInspector nodeId={selectedNodeId} onRelatedNodeClick={onRelatedNodeClick} />
             ) : (
               <IssuesPanel issues={issues} mode={analyzeMode} onIssueClick={onIssueClick} />
             )}
@@ -410,7 +445,10 @@ export default function App() {
               key={activeFixIssue.id}
               issue={activeFixIssue}
               onNodeClick={(id) => {
+                setActiveFile(null);
                 onNodeClick(id);
+                setRightTab("inspector");
+                setMainTab("graph");
                 setActiveFixIssue(null);
               }}
               onClose={() => setActiveFixIssue(null)}

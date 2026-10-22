@@ -76,6 +76,32 @@ export async function loadProject() {
 }
 
 /**
+ * Discover API endpoints declared in the active project.
+ * @returns {Promise<{ endpoints: Array<{ method: string, path: string, file: string, line: number }> }>}
+ */
+export async function fetchProjectEndpoints() {
+  const res = await apiFetch(`${BASE}/project/endpoints`, undefined, "fetchProjectEndpoints");
+  if (!res.ok) {
+    await throwApiError(res, "fetchProjectEndpoints");
+  }
+  return parseJsonResponse(res, "fetchProjectEndpoints");
+}
+
+/**
+ * Read a source file from the active project for AI Solution context.
+ * @param {string} file Project-relative source file path.
+ * @returns {Promise<{ file: string, code: string }>} Current file source.
+ */
+export async function fetchProjectFile(file) {
+  const query = new URLSearchParams({ path: file });
+  const res = await apiFetch(`${BASE}/project/file?${query}`, undefined, "fetchProjectFile");
+  if (!res.ok) {
+    await throwApiError(res, "fetchProjectFile");
+  }
+  return parseJsonResponse(res, "fetchProjectFile");
+}
+
+/**
  * Upload a .zip project for extraction + background install.
  * @param {File} file The .zip file from the file input.
  * @returns {Promise<{ success: boolean, message: string, path: string }>} Result.
@@ -140,6 +166,52 @@ export async function fetchProjectStatus() {
     await throwApiError(res, "fetchProjectStatus");
   }
   return parseJsonResponse(res, "fetchProjectStatus");
+}
+
+/**
+ * List uploaded projects managed by AultAI.
+ * @returns {Promise<{ projects: Array<{ id: string, name: string, uploadedAt: string, current: boolean }> }>}
+ */
+export async function fetchUploadedProjects() {
+  const res = await apiFetch(`${BASE}/project/uploads`, undefined, "fetchUploadedProjects");
+  if (!res.ok) {
+    await throwApiError(res, "fetchUploadedProjects");
+  }
+  return parseJsonResponse(res, "fetchUploadedProjects");
+}
+
+/**
+ * Activate a saved uploaded project as the current workspace.
+ * @param {string} id UUID identifying the upload.
+ * @returns {Promise<{ active: string, projectId: string }>} Activated workspace.
+ */
+export async function activateUploadedProject(id) {
+  const res = await apiFetch(
+    `${BASE}/project/uploads/${encodeURIComponent(id)}/open`,
+    { method: "POST" },
+    "activateUploadedProject",
+  );
+  if (!res.ok) {
+    await throwApiError(res, "activateUploadedProject");
+  }
+  return parseJsonResponse(res, "activateUploadedProject");
+}
+
+/**
+ * Delete one uploaded project.
+ * @param {string} id UUID identifying the upload.
+ * @returns {Promise<{ deleted: string, active: string, workspaceChanged: boolean }>}
+ */
+export async function deleteUploadedProject(id) {
+  const res = await apiFetch(
+    `${BASE}/project/uploads/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    "deleteUploadedProject",
+  );
+  if (!res.ok) {
+    await throwApiError(res, "deleteUploadedProject");
+  }
+  return parseJsonResponse(res, "deleteUploadedProject");
 }
 
 /**
@@ -257,15 +329,16 @@ export async function revertAISolution(proposalId) {
  * Generate a fix proposal for an issue (no files touched).
  * @param {string} issueId Issue id (e.g. "issue-bug1-checkout-no-floor").
  * @param {import("../types.js").Issue | null} [issue] Validated issue context for the AI fix.
+ * @param {boolean} [retry] Force a fresh proposal instead of returning a cached one.
  * @returns {Promise<import("../types.js").FixProposal>} The fix proposal.
  */
-export async function generateFix(issueId, issue = null) {
+export async function generateFix(issueId, issue = null, retry = false) {
   const res = await apiFetch(
     `${BASE}/fix`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ issueId, ...(issue === null ? {} : { issue }) }),
+      body: JSON.stringify({ issueId, ...(issue === null ? {} : { issue }), ...(retry ? { retry: true } : {}) }),
     },
     "generateFix",
   );
@@ -339,6 +412,27 @@ export async function runTests() {
     await throwApiError(res, "runTests");
   }
   return parseJsonResponse(res, "runTests");
+}
+
+/**
+ * Save and run explicitly approved generated Node.js tests.
+ * @param {Array<{ name: string, code: string }>} tests Test modules to execute.
+ * @returns {Promise<import("../types.js").TestRunResult & { generatedTestDirectory: string }>}
+ */
+export async function runGeneratedTests(tests) {
+  const res = await apiFetch(
+    `${BASE}/tests/run-generated`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tests }),
+    },
+    "runGeneratedTests",
+  );
+  if (!res.ok) {
+    await throwApiError(res, "runGeneratedTests");
+  }
+  return parseJsonResponse(res, "runGeneratedTests");
 }
 
 /**

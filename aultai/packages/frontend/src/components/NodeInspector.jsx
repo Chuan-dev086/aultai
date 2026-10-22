@@ -6,10 +6,10 @@ import { explainNode, fetchNode } from "../api/client.js";
  * @param {object} props
  * @param {string} props.title List heading.
  * @param {string[]} props.ids Related node ids.
- * @param {(id: string) => void} props.onNodeClick
+ * @param {(id: string) => void} props.onRelatedNodeClick
  * @returns {import("react").JSX.Element} The list.
  */
-function RelatedList({ title, ids, onNodeClick }) {
+function RelatedList({ title, ids, onRelatedNodeClick }) {
   return (
     <div>
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -23,7 +23,7 @@ function RelatedList({ title, ids, onNodeClick }) {
             <li key={id}>
               <button
                 type="button"
-                onClick={() => onNodeClick(id)}
+                onClick={() => onRelatedNodeClick(id)}
                 className="font-mono text-xs text-sky-400 hover:underline"
               >
                 {id}
@@ -40,10 +40,10 @@ function RelatedList({ title, ids, onNodeClick }) {
  * NodeInspector — detail panel for the selected graph node.
  * @param {object} props
  * @param {string | null} props.nodeId
- * @param {(id: string) => void} props.onNodeClick
+ * @param {(id: string) => void} props.onRelatedNodeClick
  * @returns {import("react").JSX.Element} The inspector panel.
  */
-export default function NodeInspector({ nodeId, onNodeClick }) {
+export default function NodeInspector({ nodeId, onRelatedNodeClick }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -149,7 +149,7 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
         {explanation !== null && (
           <div className="mt-1 rounded border border-slate-700 bg-slate-900 p-2">
             <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
-              {explanation.mode === "live" ? "Gemini AI" : "Offline mock"}
+              {explanation.mode === "live" ? "Live AI" : "Offline mock"}
             </p>
             <p className="text-sm text-slate-300">{explanation.explanation}</p>
           </div>
@@ -173,8 +173,8 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
           {detail.source}
         </pre>
       )}
-      <RelatedList title="Callers" ids={detail.callers ?? []} onNodeClick={onNodeClick} />
-      <RelatedList title="Callees" ids={detail.callees ?? []} onNodeClick={onNodeClick} />
+      <RelatedList title="Callers" ids={detail.callers ?? []} onRelatedNodeClick={onRelatedNodeClick} />
+      <RelatedList title="Callees" ids={detail.callees ?? []} onRelatedNodeClick={onRelatedNodeClick} />
     </div>
   );
 }

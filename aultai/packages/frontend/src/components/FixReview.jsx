@@ -63,6 +63,19 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
     }
   }
 
+  async function onRetryProposal() {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextProposal = await generateFix(issue.id, issue, true);
+      setProposalState({ issueId: issue.id, value: nextProposal });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-2 p-6" aria-label="Loading">
@@ -80,8 +93,15 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
         <p className="mt-1 font-mono text-xs">{error.message}</p>
         <button
           type="button"
+          onClick={onRetryProposal}
+          className="mt-3 rounded bg-amber-700 px-3 py-1 text-sm text-white hover:bg-amber-600"
+        >
+          Retry generation
+        </button>
+        <button
+          type="button"
           onClick={onClose}
-          className="mt-3 rounded bg-slate-700 px-3 py-1 text-sm text-white hover:bg-slate-600"
+          className="ml-2 mt-3 rounded bg-slate-700 px-3 py-1 text-sm text-white hover:bg-slate-600"
         >
           Discard
         </button>
@@ -106,6 +126,19 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
           risk: {proposal.risk}
         </span>
       </div>
+
+      {proposal.warning !== null && (
+        <div className="rounded border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">
+          <p>Unverified AI suggestion: {proposal.warning}</p>
+          <button
+            type="button"
+            onClick={onRetryProposal}
+            className="mt-2 rounded bg-amber-800 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+          >
+            Retry AI fix
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         <div>
@@ -163,10 +196,11 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
         <button
           type="button"
           onClick={onApply}
-          disabled={applying}
-          className="rounded bg-green-700 px-3 py-1 text-sm text-white hover:bg-green-600 disabled:opacity-50"
+          disabled={applying || !proposal.sourceVerified}
+          title={proposal.sourceVerified ? undefined : "Cannot apply an unverified patch."}
+          className="rounded bg-green-700 px-3 py-1 text-sm text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {applying ? "Applying…" : "Apply Fix"}
+          {!proposal.sourceVerified ? "Apply Fix (unavailable)" : applying ? "Applying…" : "Apply Fix"}
         </button>
         <button
           type="button"
