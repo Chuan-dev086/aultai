@@ -3,6 +3,46 @@ import path from "node:path";
 import { WORKSPACE_DIR } from "../config.js";
 
 /**
+ * Workspaces visible to AultAI, as subdirectories of WORKSPACE_DIR.
+ */
+export const KNOWN_WORKSPACES = ["shop-api", "dynamic_project"];
+
+const ACTIVE = { subdir: "shop-api" };
+
+/**
+ * Return the absolute path of the currently active workspace directory.
+ * Defaults to packages/workspace/shop-api; switchable to dynamic_project.
+ * @returns {string} Absolute workspace path.
+ */
+export function getActiveWorkspace() {
+  return path.resolve(WORKSPACE_DIR, ACTIVE.subdir);
+}
+
+/**
+ * Return the active workspace as a WORKSPACE_DIR-relative subdir name.
+ * @returns {string} e.g. "shop-api" or "dynamic_project".
+ */
+export function getActiveSubdir() {
+  return ACTIVE.subdir;
+}
+
+/**
+ * Switch the active workspace (whitelisted names only — no arbitrary paths).
+ * @param {string} name Workspace subdir name.
+ * @returns {string} The new absolute workspace path.
+ * @throws {Error} With code "UNKNOWN_WORKSPACE" for unlisted names.
+ */
+export function setActiveWorkspace(name) {
+  if (!KNOWN_WORKSPACES.includes(name)) {
+    const err = new Error(`Unknown workspace: ${name}`);
+    err.code = "UNKNOWN_WORKSPACE";
+    throw err;
+  }
+  ACTIVE.subdir = name;
+  return getActiveWorkspace();
+}
+
+/**
  * Resolve a workspace-relative path to an absolute path inside WORKSPACE_DIR.
  * Rejects traversal (`..`), absolute paths outside WORKSPACE_DIR, and
  * symlinks that escape the workspace.

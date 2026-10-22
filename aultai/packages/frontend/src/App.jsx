@@ -9,6 +9,7 @@ import TestLab from "./components/TestLab.jsx";
 import PreviewLab from "./components/PreviewLab.jsx";
 import PerfLab from "./components/PerfLab.jsx";
 import DemoStepper from "./components/DemoStepper.jsx";
+import ProjectUploader from "./components/ProjectUploader.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -25,6 +26,7 @@ export default function App() {
   const [activeFixIssue, setActiveFixIssue] = useState(null);
   const [banner, setBanner] = useState(null);
   const [mainTab, setMainTab] = useState("graph");
+  const [activeProject, setActiveProject] = useState({ name: "shop-api", port: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +78,26 @@ export default function App() {
    */
   function onClearSelection() {
     setSelectedNodeId(null);
+  }
+
+  /**
+   * Active project changed: reload Graph + Issues for the new workspace.
+   * @param {{ name: string, port: number | null }} info New project info.
+   * @returns {Promise<void>}
+   */
+  async function onProjectChange(info) {
+    setActiveProject(info);
+    setActiveFile(null);
+    setSelectedNodeId(null);
+    try {
+      const [proj, g, analysis] = await Promise.all([loadProject(), fetchGraph(), analyze()]);
+      setProject(proj);
+      setGraph(g);
+      setIssues(analysis.issues);
+      setAnalyzeMode(analysis.mode);
+    } catch {
+      // Keep the previous graph on reload failure; the banner stays accurate.
+    }
   }
 
   /**
@@ -256,6 +278,7 @@ export default function App() {
               ["tests", "Tests"],
               ["preview", "Preview"],
               ["perf", "Perf"],
+              ["projects", "Projects"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -279,8 +302,11 @@ export default function App() {
               />
             )}
             {mainTab === "tests" && <TestLab />}
-            {mainTab === "preview" && <PreviewLab />}
+            {mainTab === "preview" && (
+              <PreviewLab projectName={activeProject.name} previewPort={activeProject.port} />
+            )}
             {mainTab === "perf" && <PerfLab />}
+            {mainTab === "projects" && <ProjectUploader onProjectChange={onProjectChange} />}
           </div>
         </main>
         <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">

@@ -7,6 +7,7 @@ import { analysisRouter } from "./routes/analysis.js";
 import { fixesRouter } from "./routes/fixes.js";
 import { testsRouter } from "./routes/tests.js";
 import { perfRouter } from "./routes/perf.js";
+import { projectRouter } from "./routes/project.js";
 import { apiRouter as shopApiRouter } from "../../workspace/shop-api/src/api.js";
 
 export const app = express();
@@ -23,12 +24,16 @@ app.use("/api", analysisRouter);
 app.use("/api", fixesRouter);
 app.use("/api", testsRouter);
 app.use("/api", perfRouter);
+app.use("/api", projectRouter);
 
 // Full-Stack Preview: serve the shop-api demo page and routes from the
 // AultAI backend so the Preview tab works with a single server on :3000.
 // WORKSPACE_DIR is .../packages/workspace, so the public dir is
 // .../packages/workspace/shop-api/public.
-app.use("/preview", express.static(path.join(WORKSPACE_DIR, "shop-api", "public")));
+app.use(
+  "/preview",
+  express.static(path.join(WORKSPACE_DIR, "shop-api", "public")),
+);
 app.use("/shop-api", shopApiRouter);
 
 if (process.argv[1] !== undefined && import.meta.url.endsWith("index.js")) {

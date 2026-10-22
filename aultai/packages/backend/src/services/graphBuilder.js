@@ -1,22 +1,23 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import traverse from "@babel/traverse";
 import * as babelParser from "@babel/parser";
-import { WORKSPACE_DIR } from "../config.js";
-import { safePath, listJsFiles, readFile } from "./sandbox.js";
+import { getActiveSubdir, getActiveWorkspace, safePath, listJsFiles, readFile } from "./sandbox.js";
 import { parseFile } from "./parser.js";
 
 const walk = traverse.default ?? traverse;
 
 /**
- * Build the full code graph over every .js file in WORKSPACE_DIR.
+ * Build the code graph over every .js file in the active workspace.
+ * When the active workspace is shop-api, only it is indexed; when it is
+ * dynamic_project, only the uploaded project is indexed.
  * Files with invalid syntax are skipped (reported in files[].parse_error)
  * so one bad file never crashes the graph.
  * @returns {Promise<{ nodes: object[], edges: object[], files: object[] }>} The code graph.
  */
 export async function buildGraph() {
-  const relFiles = await listJsFiles(".");
-  const root = path.resolve(WORKSPACE_DIR);
+  const active = getActiveSubdir();
+  const relFiles = await listJsFiles(active);
+  const root = getActiveWorkspace();
   const nodes = [];
   const files = [];
   const byId = new Map();

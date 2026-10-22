@@ -124,4 +124,11 @@
  * @property {string} timestamp
  */
 
+/**
+ * @typedef {Object} ProjectStatus
+ * @property {string} active
+ * @property {number} port
+ * @property {boolean} running
+ */
+
 export {};

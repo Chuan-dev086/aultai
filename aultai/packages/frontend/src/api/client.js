@@ -37,6 +37,69 @@ export async function loadProject() {
 }
 
 /**
+ * Upload a .zip project for extraction + background install.
+ * @param {File} file The .zip file from the file input.
+ * @returns {Promise<{ success: boolean, message: string, path: string }>} Result.
+ */
+export async function uploadProject(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/project/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    await throwApiError(res, "uploadProject");
+  }
+  return res.json();
+}
+
+/**
+ * Start the uploaded project in the background (port 3001).
+ * @returns {Promise<{ port: number, pid: number | null }>} Port and pid.
+ */
+export async function startUploadedProject() {
+  const res = await fetch(`${BASE}/project/start`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "startUploadedProject");
+  }
+  return res.json();
+}
+
+/**
+ * Stop the background uploaded project.
+ * @returns {Promise<{ stopped: boolean }>} Whether a process was stopped.
+ */
+export async function stopUploadedProject() {
+  const res = await fetch(`${BASE}/project/stop`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "stopUploadedProject");
+  }
+  return res.json();
+}
+
+/**
+ * Switch the active workspace back to the bundled shop-api.
+ * @returns {Promise<{ active: string }>} The active workspace.
+ */
+export async function switchToShopApi() {
+  const res = await fetch(`${BASE}/project/switch`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "switchToShopApi");
+  }
+  return res.json();
+}
+
+/**
+ * Current upload/start status of the dynamic project.
+ * @returns {Promise<{ active: string, port: number, running: boolean }>} Status.
+ */
+export async function fetchProjectStatus() {
+  const res = await fetch(`${BASE}/project/status`);
+  if (!res.ok) {
+    await throwApiError(res, "fetchProjectStatus");
+  }
+  return res.json();
+}
+
+/**
  * Fetch the full code graph.
  * @returns {Promise<import("../types.js").GraphData>} Nodes and edges.
  */
