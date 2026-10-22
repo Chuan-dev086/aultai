@@ -110,10 +110,10 @@ A fixed-amount voucher is subtracted from the grand total WITHOUT
 (b) flooring the grand total at zero.
 Result: MINUS50 applied to a 19.90 cart produces -23.11.
 Correct logic:
-  const discount = Math.min(voucher.value, discountableSubtotal)
-  const total = Math.max(0, discountableSubtotal + tax + shipping - discount)
+const discount = Math.min(voucher.value, discountableSubtotal)
+const total = Math.max(0, discountableSubtotal + tax + shipping - discount)
 The buggy version computes:
-  const total = discountableSubtotal + taxAmount + shippingAmount - voucher.value
+const total = discountableSubtotal + taxAmount + shippingAmount - voucher.value
 with no clamp and no floor.
 **BUG 1 — authoritative location**: The live BUG 1 is in
 `packages/workspace/shop-api/src/checkout.js`, in the inline calculation
@@ -132,6 +132,19 @@ so that expired vouchers are ACCEPTED and valid vouchers are REJECTED.
 Correct logic: throw if `voucher.expiresAt !== null && voucher.expiresAt <= now`.
 
 Both bugs must be reachable through calculateCheckoutTotal() so tests catch them.
+
+### Full-Stack Preview Additions (Exempt from "do not modify shop-api" rule)
+
+To support the Full-Stack Preview demo, exactly ONE new file is allowed under
+`packages/workspace/shop-api`:
+
+- `public/index.html` : a single-file, vanilla HTML/JS page.
+  - It must serve a minimal UI with a "Checkout" button.
+  - The button must `fetch("/cart/checkout")` with a hardcoded payload:
+    1x 19.90 product and the `MINUS50` voucher.
+  - The UI must display the returned total in large text, and if the total is
+    negative, show a red error banner: "Error: Total cannot be negative!"
+  - This file is part of the demo subject (the buggy app), not AultAI itself.
 
 ## Hard Rules
 
@@ -167,14 +180,16 @@ Both bugs must be reachable through calculateCheckoutTotal() so tests catch them
 - ESM only (`import` / `export`). Every package's `package.json` sets `"type": "module"`.
 - Every EXPORTED function has a JSDoc block. Required tags: `@param` for each arg,
   `@returns`. Optional: `@throws`. Example:
-/**
- * Calculate the final checkout total for a cart, applying an optional voucher.
- * @param {import('./models.js').Cart} cart
- * @param {import('./models.js').Voucher | null} voucher
- * @param {Date} now
- * @returns {number} The final total in the same currency unit as the cart.
- */
+  /\*\*
+
+* Calculate the final checkout total for a cart, applying an optional voucher.
+* @param {import('./models.js').Cart} cart
+* @param {import('./models.js').Voucher | null} voucher
+* @param {Date} now
+* @returns {number} The final total in the same currency unit as the cart.
+  \*/
   export function calculateCheckoutTotal(cart, voucher, now) { ... }
+
 - Use `const` by default; `let` only when reassignment is required. Never `var`.
 - Use `===` and `!==`; never `==` or `!=` (except for `== null` when intentional,
   and even then prefer an explicit check).
