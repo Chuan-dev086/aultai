@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import autocannon from "autocannon";
 import { PORT } from "../config.js";
-import { DYNAMIC_PORT, projectStatus } from "./projectManager.js";
+import { projectStatus } from "./projectManager.js";
 import { getActiveSubdir } from "./sandbox.js";
 
 /**
@@ -45,10 +45,11 @@ export async function runLoadTest(opts = {}) {
   const duration = validateInt(opts.duration ?? 5, "duration", 1, 60);
   let port = PORT;
   if (activeProject === "dynamic_project") {
-    if (!projectStatus().running) {
+    const status = projectStatus();
+    if (!status.running || status.port === null) {
       throw perfError("PROJECT_NOT_RUNNING", "Start the uploaded project before running a performance test.");
     }
-    port = DYNAMIC_PORT;
+    port = status.port;
   }
   const url = `http://127.0.0.1:${port}${endpoint}`;
   const result = await runAutocannon({ url, method, payload, concurrency, duration });

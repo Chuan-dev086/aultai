@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 import { once } from "node:events";
 import { promises as fs } from "node:fs";
 import express from "express";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,7 +13,13 @@ const { graphRouter } = await import("../src/routes/graph.js");
 const { projectRouter } = await import("../src/routes/project.js");
 const { buildGraph } = await import("../src/services/graphBuilder.js");
 const { discoverEndpoints } = await import("../src/services/endpoints.js");
-const { projectStatus, removeDirectoryWithRetry, uploadProject } = await import("../src/services/projectManager.js");
+const {
+  projectStatus,
+  removeDirectoryWithRetry,
+  startProject,
+  stopProject,
+  uploadProject,
+} = await import("../src/services/projectManager.js");
 const { runGeneratedTests, runTests } = await import("../src/services/testrunner.js");
 const {
   getActiveWorkspace,
@@ -111,6 +118,58 @@ test("stops retrying a permanently locked project directory and reports an actio
       err.message.includes("then retry"),
   );
   assert.equal(attempts, 11);
+});
+
+test("starts supported split dev projects and reports their configured API and preview ports", async () => {
+  const previousActiveWorkspace = projectStatus().active;
+  setActiveWorkspace("dynamic_project");
+  const root = getActiveWorkspace();
+  const apiPort = await findAvailablePort();
+  const previewPort = await findAvailablePort();
+  await fs.mkdir(path.join(root, "server"), { recursive: true });
+  await fs.mkdir(path.join(root, "client"), { recursive: true });
+  await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      scripts: {
+        dev: "node dev.js",
+        server: "node server/index.js",
+        client: "node client/index.js",
+      },
+    }),
+  );
+  await fs.writeFile(
+    path.join(root, "client", "vite.config.js"),
+    `export default { server: { port: ${previewPort} } };`,
+  );
+  await fs.writeFile(
+    path.join(root, "server", "index.js"),
+    [
+      'import { createServer } from "node:http";',
+      `createServer((_req, res) => res.end("api")).listen(${apiPort}, "127.0.0.1");`,
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    path.join(root, "client", "index.js"),
+    [
+      'import { createServer } from "node:http";',
+      `createServer((_req, res) => res.end("preview")).listen(${previewPort}, "127.0.0.1");`,
+    ].join("\n"),
+  );
+
+  try {
+    const started = await startProject();
+    assert.equal(started.port, apiPort);
+    assert.equal(started.previewPort, previewPort);
+    assert.equal(projectStatus().port, apiPort);
+    assert.equal(projectStatus().previewPort, previewPort);
+    assert.equal((await fetch(`http://127.0.0.1:${apiPort}`)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${previewPort}`)).status, 200);
+  } finally {
+    await stopProject();
+    setActiveWorkspace(previousActiveWorkspace);
+  }
 });
 
 test("lists, opens, and safely detaches uploaded projects before deleting them", async () => {
@@ -404,6 +463,19 @@ function createZip(files) {
   end.writeUInt32LE(centralDirectory.length, 12);
   end.writeUInt32LE(localOffset, 16);
   return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+async function findAvailablePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => {
+    server.close((err) => err ? reject(err) : resolve());
+  });
+  return port;
 }
 
 function crc32(data) {

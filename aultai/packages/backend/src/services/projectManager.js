@@ -33,6 +33,8 @@ const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 
 /** @type {import("node:child_process").ChildProcess | null} */
 let dynamicChild = null;
+/** @type {import("node:child_process").ChildProcess[]} */
+let dynamicChildren = [];
 /** @type {number | null} */
 let dynamicPort = null;
 /** @type {number | null} */
@@ -440,8 +442,9 @@ export function installDeps() {
 }
 
 /**
- * Start the dynamic project in the background (`npm start`, PORT=3001).
- * Only the fixed `npm start` script is ever executed — never arbitrary input.
+ * Start the dynamic project in the background.
+ * Projects with a start script use the standard port; supported split dev
+ * projects use their API and Vite ports from their source configuration.
  * @returns {Promise<{ port: number, previewPort: number, pid: number | undefined }>} Backend and preview ports.
  * @throws {Error} When the project was never uploaded or fails to bind.
  */
@@ -491,48 +494,95 @@ async function startDynamicProject() {
     await installDeps();
   }
   const embeddedLauncher = await hasEmbeddedAultAiLauncher(cwd);
-  const previewPort = embeddedLauncher ? await findAvailablePort(5173, 100) : null;
-  await ensurePortAvailable(DYNAMIC_PORT);
-  const child = spawn("npm", ["start"], {
-    cwd,
-    shell: process.platform === "win32",
-    windowsHide: true,
-    env: {
-      ...process.env,
-      PORT: String(DYNAMIC_PORT),
-      ...(embeddedLauncher
-        ? {
-            AULTAI_NO_OPEN: "1",
-            AULTAI_PREVIEW_PORT: String(previewPort),
-          }
-        : {}),
-    },
-  });
+  const startup = embeddedLauncher ? null : await detectSplitDevProject(cwd);
+  if (!embeddedLauncher && startup === null) {
+    throw uploadError(
+      'This project has no npm "start" script or supported split dev setup. Add a start script that listens on the AultAI project port, or configure server/index.js and client/vite.config.js.',
+    );
+  }
+  const previewPort = embeddedLauncher
+    ? await findAvailablePort(5173, 100)
+    : startup?.useDev
+      ? await findAvailablePort(startup.previewPort, 100)
+      : startup?.previewPort ?? null;
+  const projectPort = startup?.apiPort ?? DYNAMIC_PORT;
+  await ensurePortAvailable(projectPort);
+  if (previewPort !== null && previewPort !== projectPort) {
+    await ensurePortAvailable(previewPort);
+  }
   let startupOutput = "";
-  const appendStartupOutput = (chunk) => {
-    startupOutput = `${startupOutput}${String(chunk)}`.slice(-6000);
+  const children = [];
+  const childEnv = {
+    ...process.env,
+    PORT: String(projectPort),
+    ...(embeddedLauncher
+      ? {
+          AULTAI_NO_OPEN: "1",
+          AULTAI_PREVIEW_PORT: String(previewPort),
+        }
+      : startup?.useDev
+        ? { AULTAI_PREVIEW_PORT: String(previewPort) }
+        : {}),
   };
-  child.stdout.on("data", appendStartupOutput);
-  child.stderr.on("data", appendStartupOutput);
-  dynamicChild = child;
-  dynamicPort = DYNAMIC_PORT;
-  dynamicPreviewPort = previewPort ?? DYNAMIC_PORT;
-  child.on("error", () => {
-    dynamicChild = null;
-    dynamicPort = null;
-    dynamicPreviewPort = null;
-  });
-  child.on("exit", () => {
-    if (dynamicChild === child) {
-      dynamicChild = null;
-      dynamicPort = null;
-      dynamicPreviewPort = null;
-    }
-  });
+  const spawnProjectCommand = (args) => {
+    const child = spawn("npm", args, {
+      cwd,
+      shell: process.platform === "win32",
+      windowsHide: true,
+      env: childEnv,
+    });
+    const appendStartupOutput = (chunk) => {
+      startupOutput = `${startupOutput}${String(chunk)}`.slice(-6000);
+    };
+    child.stdout.on("data", appendStartupOutput);
+    child.stderr.on("data", appendStartupOutput);
+    children.push(child);
+    return child;
+  };
+  const primaryChild = startup?.useDev
+    ? spawnProjectCommand(["run", "server"])
+    : spawnProjectCommand(["start"]);
+  if (startup?.useDev) {
+    spawnProjectCommand([
+      "run",
+      "client",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(previewPort),
+      "--strictPort",
+    ]);
+  }
+  dynamicChildren = children;
+  dynamicChild = primaryChild;
+  dynamicPort = projectPort;
+  dynamicPreviewPort = previewPort ?? projectPort;
+  for (const child of children) {
+    child.on("exit", () => {
+      if (!dynamicChildren.includes(child)) return;
+      const anotherProcessRunning = dynamicChildren.some(
+        (runningChild) => runningChild !== child &&
+          runningChild.exitCode === null &&
+          runningChild.signalCode === null,
+      );
+      if (anotherProcessRunning) {
+        void stopProject().catch((err) => {
+          console.error(`[project] failed to stop remaining project processes: ${err.message}`);
+        });
+      } else {
+        dynamicChildren = [];
+        dynamicChild = null;
+        dynamicPort = null;
+        dynamicPreviewPort = null;
+      }
+    });
+  }
   try {
-    await waitForPort(DYNAMIC_PORT, 30000, child);
+    await waitForPort(projectPort, 30000, primaryChild);
     if (previewPort !== null) {
-      await waitForPort(previewPort, 30000, child);
+      const previewChild = children[1] ?? primaryChild;
+      await waitForPort(previewPort, 30000, previewChild);
     }
   } catch (err) {
     try {
@@ -540,8 +590,9 @@ async function startDynamicProject() {
     } catch (stopErr) {
       throw uploadError(`${err.message}; failed to stop the project after startup failure: ${stopErr.message}`);
     }
-    const exitDetails = child.exitCode !== null
-      ? ` (exit code ${child.exitCode}${child.signalCode === null ? "" : `, signal ${child.signalCode}`})`
+    const exitedChild = children.find((child) => child.exitCode !== null);
+    const exitDetails = exitedChild !== undefined
+      ? ` (exit code ${exitedChild.exitCode}${exitedChild.signalCode === null ? "" : `, signal ${exitedChild.signalCode}`})`
       : "";
     const output = startupOutput.trim();
     throw uploadError(
@@ -549,10 +600,66 @@ async function startDynamicProject() {
     );
   }
   return {
-    port: DYNAMIC_PORT,
-    previewPort: previewPort ?? DYNAMIC_PORT,
-    pid: child.pid,
+    port: projectPort,
+    previewPort: previewPort ?? projectPort,
+    pid: primaryChild.pid,
   };
+}
+
+/**
+ * Detect projects with separate npm server/client scripts and fixed source
+ * ports, used when no npm start script is defined.
+ * @param {string} cwd Uploaded project root.
+ * @returns {Promise<{ apiPort: number, previewPort: number | null, useDev: boolean } | null>}
+ */
+async function detectSplitDevProject(cwd) {
+  let manifest;
+  try {
+    manifest = JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8"));
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw uploadError(`Could not read uploaded project package.json: ${err.message}`);
+  }
+  const scripts = manifest?.scripts;
+  if (
+    typeof scripts?.start === "string" &&
+    scripts.start.trim() !== ""
+  ) {
+    return { apiPort: DYNAMIC_PORT, previewPort: null, useDev: false };
+  }
+  if (
+    typeof scripts?.dev !== "string" ||
+    typeof scripts?.server !== "string" ||
+    typeof scripts?.client !== "string"
+  ) {
+    return null;
+  }
+
+  let serverSource;
+  let viteConfig;
+  try {
+    [serverSource, viteConfig] = await Promise.all([
+      fs.readFile(path.join(cwd, "server", "index.js"), "utf8"),
+      fs.readFile(path.join(cwd, "client", "vite.config.js"), "utf8"),
+    ]);
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+  const apiPort = Number(serverSource.match(/\.listen\(\s*(\d{1,5})\b/)?.[1]);
+  const previewPort = Number(viteConfig.match(/\bport\s*:\s*(\d{1,5})\b/)?.[1]);
+  if (
+    !Number.isInteger(apiPort) ||
+    apiPort < 1 ||
+    apiPort > 65535 ||
+    !Number.isInteger(previewPort) ||
+    previewPort < 1 ||
+    previewPort > 65535 ||
+    apiPort === previewPort
+  ) {
+    return null;
+  }
+  return { apiPort, previewPort, useDev: true };
 }
 
 /**
@@ -560,31 +667,37 @@ async function startDynamicProject() {
  * @returns {Promise<{ stopped: boolean }>} Whether a process was stopped.
  */
 export async function stopProject() {
-  const child = dynamicChild;
-  if (child === null || child.pid === undefined) {
+  const children = dynamicChildren.length > 0
+    ? [...dynamicChildren]
+    : dynamicChild === null ? [] : [dynamicChild];
+  if (children.length === 0) {
     return { stopped: false };
   }
-  if (child.exitCode !== null || child.signalCode !== null) {
-    if (dynamicChild === child) {
-      dynamicChild = null;
-      dynamicPort = null;
-      dynamicPreviewPort = null;
-    }
+  const runningChildren = children.filter(
+    (child) => child.pid !== undefined && child.exitCode === null && child.signalCode === null,
+  );
+  if (runningChildren.length === 0) {
+    dynamicChildren = [];
+    dynamicChild = null;
+    dynamicPort = null;
+    dynamicPreviewPort = null;
     return { stopped: false };
   }
-  await new Promise((resolve, reject) => {
+  await Promise.all(runningChildren.map((child) => new Promise((resolve, reject) => {
     treeKill(child.pid, (err) => {
-      if (err?.code === "ESRCH") {
-        resolve();
-      } else if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
+      if (
+        err?.code === "ESRCH" ||
+        (process.platform === "win32" && /process .*not found/i.test(err?.message ?? ""))
+      ) resolve();
+      else if (err) reject(err);
+      else resolve();
     });
-  });
-  if (child.exitCode === null && child.signalCode === null) {
-    await new Promise((resolve, reject) => {
+  })));
+  await Promise.all(runningChildren.map((child) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(uploadError("Dynamic project did not exit after the stop request"));
       }, STOP_TIMEOUT_MS);
@@ -593,12 +706,11 @@ export async function stopProject() {
         resolve();
       });
     });
-  }
-  if (dynamicChild === child) {
-    dynamicChild = null;
-    dynamicPort = null;
-    dynamicPreviewPort = null;
-  }
+  }));
+  dynamicChildren = [];
+  dynamicChild = null;
+  dynamicPort = null;
+  dynamicPreviewPort = null;
   return { stopped: true };
 }
 
