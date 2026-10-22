@@ -104,17 +104,24 @@ deterministic.
 
 ## Two Bugs That MUST Be Planted (core of the demo — do not omit, do not "helpfully" fix)
 
-BUG 1 (vouchers.js + checkout.js):
+BUG 1 (authoritative location: checkout.js; vouchers.js.applyVoucher is legacy dead code):
 A fixed-amount voucher is subtracted from the grand total WITHOUT
 (a) capping the discount at the discountable subtotal, and
 (b) flooring the grand total at zero.
-Result: MINUS50 applied to a 30.00 cart produces -20.00.
+Result: MINUS50 applied to a 19.90 cart produces -23.11.
 Correct logic:
-const discount = Math.min(voucher.value, discountableSubtotal)
-const total = Math.max(0, discountableSubtotal + tax + shipping - discount)
-The buggy version must compute something like
-const total = discountableSubtotal + tax + shipping - voucher.value
+  const discount = Math.min(voucher.value, discountableSubtotal)
+  const total = Math.max(0, discountableSubtotal + tax + shipping - discount)
+The buggy version computes:
+  const total = discountableSubtotal + taxAmount + shippingAmount - voucher.value
 with no clamp and no floor.
+**BUG 1 — authoritative location**: The live BUG 1 is in
+`packages/workspace/shop-api/src/checkout.js`, in the inline calculation
+`discountableSubtotal + taxAmount + shippingAmount - voucher.value` inside
+`calculateCheckoutTotal`. The `applyVoucher` function in `vouchers.js` is
+legacy dead code — Phase 3's analyzer MUST ignore it, Phase 4's fixer MUST
+NOT modify it, Phase 5's tests do not exercise it. Only fix the checkout.js
+inline path.
 
 BUG 2 (vouchers.js):
 The expiry comparison is INVERTED. The current buggy code must read:
@@ -160,13 +167,13 @@ Both bugs must be reachable through calculateCheckoutTotal() so tests catch them
 - ESM only (`import` / `export`). Every package's `package.json` sets `"type": "module"`.
 - Every EXPORTED function has a JSDoc block. Required tags: `@param` for each arg,
   `@returns`. Optional: `@throws`. Example:
-  /\*\*
-  _ Calculate the final checkout total for a cart, applying an optional voucher.
-  _ @param {import('./models.js').Cart} cart
-  _ @param {import('./models.js').Voucher | null} voucher
-  _ @param {Date} now
-  _ @returns {number} The final total in the same currency unit as the cart.
-  _/
+/**
+ * Calculate the final checkout total for a cart, applying an optional voucher.
+ * @param {import('./models.js').Cart} cart
+ * @param {import('./models.js').Voucher | null} voucher
+ * @param {Date} now
+ * @returns {number} The final total in the same currency unit as the cart.
+ */
   export function calculateCheckoutTotal(cart, voucher, now) { ... }
 - Use `const` by default; `let` only when reassignment is required. Never `var`.
 - Use `===` and `!==`; never `==` or `!=` (except for `== null` when intentional,
