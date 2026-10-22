@@ -61,6 +61,31 @@ import { z } from "zod";
  * @property {"live" | "mock"} mode
  */
 
+/**
+ * @typedef {Object} FixProposal
+ * @property {string} id
+ * @property {string} issueId
+ * @property {string} file
+ * @property {string} originalCode
+ * @property {string} proposedCode
+ * @property {string} unifiedDiff
+ * @property {string} explanation
+ * @property {string[]} rationaleSteps
+ * @property {string[]} impactedNodes
+ * @property {"low" | "medium" | "high"} risk
+ */
+
+/**
+ * @typedef {Object} ApplyResponse
+ * @property {boolean} applied
+ * @property {string} backupPath
+ */
+
+/**
+ * @typedef {Object} RevertResponse
+ * @property {boolean} reverted
+ */
+
 export const NodeSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -116,4 +141,26 @@ export const IssueSchema = z.object({
 export const AnalyzeResponseSchema = z.object({
   issues: z.array(IssueSchema),
   mode: z.enum(["live", "mock"]),
+});
+
+export const FixProposalSchema = z.object({
+  id: z.string(),
+  issueId: z.string(),
+  file: z.string(),
+  originalCode: z.string(),
+  proposedCode: z.string(),
+  unifiedDiff: z.string(),
+  explanation: z.string(),
+  rationaleSteps: z.array(z.string()),
+  impactedNodes: z.array(z.string()),
+  risk: z.enum(["low", "medium", "high"]),
+});
+
+export const ApplyResponseSchema = z.object({
+  applied: z.literal(true),
+  backupPath: z.string(),
+});
+
+export const RevertResponseSchema = z.object({
+  reverted: z.literal(true),
 });

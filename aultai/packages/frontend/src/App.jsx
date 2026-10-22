@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { analyze, fetchGraph, loadProject } from "./api/client.js";
+import { analyze, fetchGraph, loadProject, revertFix } from "./api/client.js";
 import FileTree from "./components/FileTree.jsx";
 import CodeGraph from "./components/CodeGraph.jsx";
 import NodeInspector from "./components/NodeInspector.jsx";
 import IssuesPanel from "./components/IssuesPanel.jsx";
+import FixReview from "./components/FixReview.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -17,6 +18,8 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [selectedIssueId, setSelectedIssueId] = useState(null);
   const [rightTab, setRightTab] = useState("inspector");
+  const [activeFixIssue, setActiveFixIssue] = useState(null);
+  const [banner, setBanner] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,15 +97,47 @@ export default function App() {
   }
 
   /**
-   * Jump from an issue to its node in the Inspector.
+   * Open the FixReview modal for an issue (from the Issues panel).
    * @param {import("./types.js").Issue} issue The clicked issue.
    * @returns {void}
    */
   function onIssueClick(issue) {
     setSelectedIssueId(issue.id);
-    setActiveFile(issue.file);
-    setSelectedNodeId(issue.node_id);
-    setRightTab("inspector");
+    setActiveFixIssue(issue);
+  }
+
+  /**
+   * Fix applied: close the modal, show a banner, refresh the graph.
+   * @param {import("./types.js").Issue} issue The issue that was fixed.
+   * @returns {Promise<void>}
+   */
+  async function onFixApplied(issue) {
+    setActiveFixIssue(null);
+    setBanner({ message: `Fix applied for ${issue.id}`, issueId: issue.id });
+    try {
+      const g = await fetchGraph();
+      setGraph(g);
+    } catch {
+      // Banner stays even if the graph refresh fails.
+    }
+  }
+
+  /**
+   * Undo the last applied fix via revertFix.
+   * @returns {Promise<void>}
+   */
+  async function onUndo() {
+    if (banner === null) {
+      return;
+    }
+    try {
+      await revertFix(banner.issueId);
+      const g = await fetchGraph();
+      setGraph(g);
+      setBanner({ message: `Fix reverted for ${banner.issueId}`, issueId: null });
+    } catch (err) {
+      setBanner({ message: `Revert failed: ${err.message}`, issueId: null });
+    }
   }
 
   if (loading) {
@@ -143,6 +178,27 @@ export default function App() {
           {analyzing ? "Analyzing…" : "Analyze"}
         </button>
       </header>
+      {banner !== null && (
+        <div className="flex items-center gap-3 border-b border-green-800 bg-green-950 px-4 py-1 text-sm text-green-200">
+          <span>{banner.message}</span>
+          {banner.issueId !== null && (
+            <button
+              type="button"
+              onClick={onUndo}
+              className="rounded bg-slate-700 px-2 py-0.5 text-xs text-white hover:bg-slate-600"
+            >
+              Undo
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setBanner(null)}
+            className="text-xs text-green-400 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <aside className="w-[260px] shrink-0 overflow-y-auto border-r border-slate-800">
           <FileTree files={project.files} activeFile={activeFile} onFileClick={onFileClick} />
@@ -183,6 +239,21 @@ export default function App() {
           </div>
         </aside>
       </div>
+      {activeFixIssue !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded border border-slate-700 bg-slate-900">
+            <FixReview
+              issue={activeFixIssue}
+              onNodeClick={(id) => {
+                onNodeClick(id);
+                setActiveFixIssue(null);
+              }}
+              onClose={() => setActiveFixIssue(null)}
+              onApplied={onFixApplied}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

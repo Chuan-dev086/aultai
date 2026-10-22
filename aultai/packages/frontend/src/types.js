@@ -61,4 +61,18 @@
  * @property {"live" | "mock"} mode
  */
 
+/**
+ * @typedef {Object} FixProposal
+ * @property {string} id
+ * @property {string} issueId
+ * @property {string} file
+ * @property {string} originalCode
+ * @property {string} proposedCode
+ * @property {string} unifiedDiff
+ * @property {string} explanation
+ * @property {string[]} rationaleSteps
+ * @property {string[]} impactedNodes
+ * @property {"low" | "medium" | "high"} risk
+ */
+
 export {};

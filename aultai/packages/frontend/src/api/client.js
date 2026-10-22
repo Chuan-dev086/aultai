@@ -87,3 +87,54 @@ export async function explainNode(id) {
   }
   return res.json();
 }
+
+/**
+ * Generate a fix proposal for an issue (no files touched).
+ * @param {string} issueId Issue id (e.g. "issue-bug1-checkout-no-floor").
+ * @returns {Promise<import("../types.js").FixProposal>} The fix proposal.
+ */
+export async function generateFix(issueId) {
+  const res = await fetch(`${BASE}/fix`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ issueId }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "generateFix");
+  }
+  return res.json();
+}
+
+/**
+ * Apply a fix (explicit user action; creates a .bak backup).
+ * @param {string} issueId Issue id.
+ * @returns {Promise<{ applied: true, backupPath: string }>} Apply result.
+ */
+export async function applyFix(issueId) {
+  const res = await fetch(`${BASE}/fix/apply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ issueId }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "applyFix");
+  }
+  return res.json();
+}
+
+/**
+ * Revert an applied fix (restores the .bak backup).
+ * @param {string} issueId Issue id.
+ * @returns {Promise<{ reverted: true }>} Revert result.
+ */
+export async function revertFix(issueId) {
+  const res = await fetch(`${BASE}/fix/revert`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ issueId }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "revertFix");
+  }
+  return res.json();
+}

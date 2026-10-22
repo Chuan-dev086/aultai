@@ -3,6 +3,7 @@ import cors from "cors";
 import { PORT } from "./config.js";
 import { graphRouter } from "./routes/graph.js";
 import { analysisRouter } from "./routes/analysis.js";
+import { fixesRouter } from "./routes/fixes.js";
 
 export const app = express();
 
@@ -15,6 +16,7 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api", graphRouter);
 app.use("/api", analysisRouter);
+app.use("/api", fixesRouter);
 
 if (process.argv[1] !== undefined && import.meta.url.endsWith("index.js")) {
   app.listen(PORT, () => {
