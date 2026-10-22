@@ -26,9 +26,20 @@ function styleFor(n, selected, dimmed) {
   };
   switch (n.type) {
     case "module":
-      return { ...base, background: "#1e293b", color: "#e2e8f0", borderRadius: 8 };
+      return {
+        ...base,
+        background: "#1e293b",
+        color: "#e2e8f0",
+        borderRadius: 8,
+      };
     case "function":
-      return { ...base, background: "#312e81", color: "#e0e7ff", borderRadius: 8, borderColor: "#818cf8" };
+      return {
+        ...base,
+        background: "#312e81",
+        color: "#e0e7ff",
+        borderRadius: 8,
+        borderColor: "#818cf8",
+      };
     case "method":
       return {
         ...base,
@@ -39,7 +50,13 @@ function styleFor(n, selected, dimmed) {
         borderStyle: "dashed",
       };
     case "class":
-      return { ...base, background: "#064e3b", color: "#a7f3d0", borderRadius: 8, borderColor: "#34d399" };
+      return {
+        ...base,
+        background: "#064e3b",
+        color: "#a7f3d0",
+        borderRadius: 8,
+        borderColor: "#34d399",
+      };
     case "variable":
       return {
         ...base,
@@ -59,7 +76,12 @@ function styleFor(n, selected, dimmed) {
         opacity: dimmed ? 0.15 : 0.7,
       };
     default:
-      return { ...base, background: "#1e293b", color: "#e2e8f0", borderRadius: 8 };
+      return {
+        ...base,
+        background: "#1e293b",
+        color: "#e2e8f0",
+        borderRadius: 8,
+      };
   }
 }
 
@@ -73,7 +95,10 @@ function edgePropsFor(e) {
     case "calls":
       return { animated: false, style: { stroke: "#94a3b8", strokeWidth: 1 } };
     case "imports":
-      return { animated: false, style: { stroke: "#64748b", strokeWidth: 1, strokeDasharray: "5 5" } };
+      return {
+        animated: false,
+        style: { stroke: "#64748b", strokeWidth: 1, strokeDasharray: "5 5" },
+      };
     case "inherits":
       return { animated: false, style: { stroke: "#34d399", strokeWidth: 3 } };
     case "defines":
@@ -117,7 +142,9 @@ export default function CodeGraph({
     if (activeFile === null) {
       return null;
     }
-    const ids = new Set(nodes.filter((n) => n.file === activeFile).map((n) => n.id));
+    const ids = new Set(
+      nodes.filter((n) => n.file === activeFile).map((n) => n.id),
+    );
     for (const e of edges) {
       if (ids.has(e.source)) {
         ids.add(e.target);
@@ -173,7 +200,11 @@ export default function CodeGraph({
   const flowEdges = useMemo(
     () =>
       edges
-        .filter((e) => visible.some((n) => n.id === e.source) && visible.some((n) => n.id === e.target))
+        .filter(
+          (e) =>
+            visible.some((n) => n.id === e.source) &&
+            visible.some((n) => n.id === e.target),
+        )
         .map((e) => ({
           id: `${e.source}->${e.target}:${e.type}`,
           source: e.source,
@@ -200,17 +231,17 @@ export default function CodeGraph({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-slate-800 p-2">
+    <div className="flex-col h-full flex">
+      <div className="gap-3 p-2 border-b border-slate-800 flex items-center">
         <input
           type="text"
           value={query}
           onChange={(ev) => setQuery(ev.target.value)}
           onKeyDown={onSearchKey}
           placeholder="Search nodes…"
-          className="w-64 rounded bg-slate-800 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-500"
+          className="px-2 py-1 w-64 rounded bg-slate-800 text-sm text-slate-200 placeholder:text-slate-500"
         />
-        <label className="flex items-center gap-1 text-xs text-slate-400">
+        <label className="gap-1 text-xs text-slate-400 flex items-center">
           <input
             type="checkbox"
             checked={hideExternal}
@@ -219,7 +250,7 @@ export default function CodeGraph({
           Hide external nodes
         </label>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="flex-1 min-h-0">
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}

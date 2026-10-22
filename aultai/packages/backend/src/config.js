@@ -5,9 +5,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const PORT = Number(process.env.PORT ?? 3000);
 
-// NOTE: the repo path contains a space ("hackathon 2026") — keep it quoted
-// wherever WORKSPACE_DIR is interpolated into shell commands.
-export const WORKSPACE_DIR = "C:\\Users\\User\\Desktop\\hackathon 2026\\aultai\\packages\\workspace";
+// Resolve the workspace relative to this file instead of hardcoding an
+// absolute path, so the repo works on any machine / OS.
+// here        = packages/backend/src
+// ..          = packages/backend
+// ../..       = packages
+// ../../workspace = packages/workspace
+// An explicit WORKSPACE_DIR env var still takes precedence if set.
+export const WORKSPACE_DIR =
+  process.env.WORKSPACE_DIR || path.resolve(here, "..", "..", "workspace");
 
 export const MOCK_AI = process.env.MOCK_AI !== "0";
 

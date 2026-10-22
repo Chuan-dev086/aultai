@@ -39,12 +39,10 @@ export async function uploadProject(zipFilePath) {
   } catch (err) {
     throw uploadError(`Failed to extract zip: ${err.message}`);
   }
-  try {
-    const stat = await fs.stat(path.join(target, "package.json"));
-    if (!stat.isFile()) {
-      throw new Error("not a file");
-    }
-  } catch {
+  if (!(await hasPackageJson(target))) {
+    await flattenSingleSubdir(target);
+  }
+  if (!(await hasPackageJson(target))) {
     throw uploadError("Uploaded project must contain a package.json at its root");
   }
   setActiveWorkspace(DYNAMIC_SUBDIR);
@@ -194,6 +192,51 @@ async function waitForPort(port, timeoutMs) {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+/**
+ * Check whether a directory contains a package.json file.
+ * @param {string} dir Absolute path of the directory to check.
+ * @returns {Promise<boolean>} True when package.json exists and is a file.
+ */
+async function hasPackageJson(dir) {
+  try {
+    const stat = await fs.stat(path.join(dir, "package.json"));
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Flatten a zip that contains a single top-level folder (e.g. zipping
+ * `my-app/` instead of its contents). Moves all files from that
+ * subdirectory up to the target root and removes the empty subdirectory.
+ * No-op unless the target holds exactly one directory containing a
+ * package.json.
+ * @param {string} target Absolute path of the extraction root.
+ * @returns {Promise<void>} Resolves after flattening or no-op.
+ */
+async function flattenSingleSubdir(target) {
+  let entries;
+  try {
+    entries = await fs.readdir(target, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const dirs = entries.filter((entry) => entry.isDirectory());
+  if (dirs.length !== 1) {
+    return;
+  }
+  const sub = path.join(target, dirs[0].name);
+  if (!(await hasPackageJson(sub))) {
+    return;
+  }
+  const children = await fs.readdir(sub);
+  for (const child of children) {
+    await fs.rename(path.join(sub, child), path.join(target, child));
+  }
+  await fs.rm(sub, { recursive: true, force: true });
 }
 
 /**

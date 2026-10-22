@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import traverse from "@babel/traverse";
 import * as babelParser from "@babel/parser";
-import { getActiveSubdir, getActiveWorkspace, safePath, listJsFiles, readFile } from "./sandbox.js";
+import { getActiveSubdir, safePath, listJsFiles, readFile } from "./sandbox.js";
+import { WORKSPACE_DIR } from "../config.js";
 import { parseFile } from "./parser.js";
 
 const walk = traverse.default ?? traverse;
@@ -17,7 +18,7 @@ const walk = traverse.default ?? traverse;
 export async function buildGraph() {
   const active = getActiveSubdir();
   const relFiles = await listJsFiles(active);
-  const root = getActiveWorkspace();
+  const root = WORKSPACE_DIR;
   const nodes = [];
   const files = [];
   const byId = new Map();
@@ -36,7 +37,11 @@ export async function buildGraph() {
     try {
       parsed = parseFile(abs, root, text);
     } catch {
-      files.push({ path: rel, node_count: 0, parse_error: "syntax error, skipped" });
+      files.push({
+        path: rel,
+        node_count: 0,
+        parse_error: "syntax error, skipped",
+      });
       continue;
     }
     moduleOf.set(parsed.nodes[0].id, parsed.nodes[0].file);
@@ -85,7 +90,10 @@ export async function buildGraph() {
     } catch {
       continue;
     }
-    const mod = rel.split("/").pop().replace(/\.(js|jsx)$/, "");
+    const mod = rel
+      .split("/")
+      .pop()
+      .replace(/\.(js|jsx)$/, "");
     const table = {};
     const selfId = mod;
     walk(ast, {
@@ -101,12 +109,20 @@ export async function buildGraph() {
           table[local] = { fromModule, imported };
         }
         if (fromModule !== null) {
-          rawEdges.push({ source: selfId, target: fromModule, type: "imports" });
+          rawEdges.push({
+            source: selfId,
+            target: fromModule,
+            type: "imports",
+          });
         }
       },
       ClassDeclaration(p) {
         const superCls = p.node.superClass;
-        if (superCls !== null && superCls !== undefined && superCls.type === "Identifier") {
+        if (
+          superCls !== null &&
+          superCls !== undefined &&
+          superCls.type === "Identifier"
+        ) {
           rawEdges.push({
             source: `${mod}.${p.node.id?.name ?? "unknown"}`,
             target: superCls.name,
@@ -231,7 +247,11 @@ function calleeName(callee) {
   if (callee.type === "Identifier") {
     return callee.name;
   }
-  if (callee.type === "MemberExpression" && !callee.computed && callee.property.type === "Identifier") {
+  if (
+    callee.type === "MemberExpression" &&
+    !callee.computed &&
+    callee.property.type === "Identifier"
+  ) {
     if (callee.object.type === "Identifier") {
       return `${callee.object.name}.${callee.property.name}`;
     }
@@ -257,7 +277,11 @@ function enclosingFunctionId(fnPath, text, mod) {
     return `${mod}.${node.id.name}`;
   }
   const parent = fnPath.parentPath?.node;
-  if (parent !== undefined && parent.type === "VariableDeclarator" && parent.id.type === "Identifier") {
+  if (
+    parent !== undefined &&
+    parent.type === "VariableDeclarator" &&
+    parent.id.type === "Identifier"
+  ) {
     return `${mod}.${parent.id.name}`;
   }
   if (node.type === "ClassMethod") {
@@ -280,7 +304,10 @@ function resolveImportToModule(src, fromMod, moduleNames) {
   if (!src.startsWith(".")) {
     return null;
   }
-  const base = src.split("/").pop().replace(/\.(js|jsx)$/, "");
+  const base = src
+    .split("/")
+    .pop()
+    .replace(/\.(js|jsx)$/, "");
   return moduleNames.has(base) ? base : null;
 }
 

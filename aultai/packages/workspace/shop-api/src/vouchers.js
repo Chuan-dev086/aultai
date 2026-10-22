@@ -6,7 +6,7 @@
  * @throws {Error} When the voucher is expired.
  */
 export function validateVoucher(voucher, now) {
-  if (voucher.expiresAt !== null && voucher.expiresAt > now) {
+  if (voucher.expiresAt !== null && voucher.expiresAt <= now) {
     throw new Error("Voucher expired");
   }
   return true;

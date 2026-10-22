@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import path from "node:path";
+import http from "node:http";
+import { fileURLToPath } from "node:url";
 import { PORT, WORKSPACE_DIR } from "./config.js";
 import { graphRouter } from "./routes/graph.js";
 import { analysisRouter } from "./routes/analysis.js";
@@ -8,11 +10,48 @@ import { fixesRouter } from "./routes/fixes.js";
 import { testsRouter } from "./routes/tests.js";
 import { perfRouter } from "./routes/perf.js";
 import { projectRouter } from "./routes/project.js";
-import { apiRouter as shopApiRouter } from "../../workspace/shop-api/src/api.js";
+import {
+  startShopApi,
+  stopShopApi,
+  forceStopShopApi,
+  watchShopApiSource,
+  SHOP_API_PORT,
+} from "./services/shopApiProcess.js";
 
 export const app = express();
 
 app.use(cors());
+
+// Proxy /shop-api/* to the shop-api worker process so that applying fixes
+// (which rewrites shop-api source) takes effect on the next request without
+// restarting the whole backend. Must be registered before express.json()
+// because the proxy forwards the raw request body untouched.
+app.use("/shop-api", (req, res) => {
+  const proxyReq = http.request(
+    {
+      hostname: "127.0.0.1",
+      port: SHOP_API_PORT,
+      path: req.url,
+      method: req.method,
+      headers: req.headers,
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    },
+  );
+  proxyReq.on("error", (err) => {
+    if (!res.headersSent) {
+      res
+        .status(502)
+        .json({ error: "shop-api unavailable", detail: err.message });
+    } else {
+      res.destroy();
+    }
+  });
+  req.pipe(proxyReq);
+});
+
 app.use(express.json());
 
 app.get("/api/health", (req, res) => {
@@ -26,19 +65,38 @@ app.use("/api", testsRouter);
 app.use("/api", perfRouter);
 app.use("/api", projectRouter);
 
-// Full-Stack Preview: serve the shop-api demo page and routes from the
-// AultAI backend so the Preview tab works with a single server on :3000.
-// WORKSPACE_DIR is .../packages/workspace, so the public dir is
-// .../packages/workspace/shop-api/public.
+// Full-Stack Preview: serve the shop-api demo page from the backend so the
+// Preview tab works with a single server on :3000.
 app.use(
   "/preview",
   express.static(path.join(WORKSPACE_DIR, "shop-api", "public")),
 );
-app.use("/shop-api", shopApiRouter);
 
-if (process.argv[1] !== undefined && import.meta.url.endsWith("index.js")) {
+const isMain =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  const workerReady = startShopApi().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(`[shop-api] failed to start: ${err.message}`);
+  });
+
   app.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`AultAI backend listening on port ${PORT}`);
+    workerReady.then(() => {
+      watchShopApiSource();
+    });
   });
+
+  const shutdown = async () => {
+    // eslint-disable-next-line no-console
+    console.log("\nShutting down...");
+    await stopShopApi();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("exit", forceStopShopApi);
 }

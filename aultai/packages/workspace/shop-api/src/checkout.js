@@ -35,9 +35,15 @@ export function calculateCheckoutTotal(cart, voucher, now) {
   }
   if (voucher.type === "percent") {
     const discount = (discountableSubtotal * voucher.value) / 100;
-    return roundToCents(discountableSubtotal + taxAmount + shippingAmount - discount);
+    return roundToCents(
+      discountableSubtotal + taxAmount + shippingAmount - discount,
+    );
   }
-  const total = discountableSubtotal + taxAmount + shippingAmount - voucher.value;
+  const discount = Math.min(voucher.value, discountableSubtotal);
+  const total = Math.max(
+    0,
+    discountableSubtotal + taxAmount + shippingAmount - discount,
+  );
   return roundToCents(total);
 }
 
@@ -62,7 +68,8 @@ export function placeOrder(cart, voucher, now) {
     id: randomUUID(),
     items: cart.items,
     total,
-    voucherCode: voucher === null || voucher === undefined ? null : voucher.code,
+    voucherCode:
+      voucher === null || voucher === undefined ? null : voucher.code,
     placedAt: now,
   };
 }
