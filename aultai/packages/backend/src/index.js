@@ -1,9 +1,12 @@
 import express from "express";
 import cors from "cors";
-import { PORT } from "./config.js";
+import path from "node:path";
+import { PORT, WORKSPACE_DIR } from "./config.js";
 import { graphRouter } from "./routes/graph.js";
 import { analysisRouter } from "./routes/analysis.js";
 import { fixesRouter } from "./routes/fixes.js";
+import { testsRouter } from "./routes/tests.js";
+import { apiRouter as shopApiRouter } from "../../workspace/shop-api/src/api.js";
 
 export const app = express();
 
@@ -17,6 +20,14 @@ app.get("/api/health", (req, res) => {
 app.use("/api", graphRouter);
 app.use("/api", analysisRouter);
 app.use("/api", fixesRouter);
+app.use("/api", testsRouter);
+
+// Full-Stack Preview: serve the shop-api demo page and routes from the
+// AultAI backend so the Preview tab works with a single server on :3000.
+// WORKSPACE_DIR is .../packages/workspace, so the public dir is
+// .../packages/workspace/shop-api/public.
+app.use("/preview", express.static(path.join(WORKSPACE_DIR, "shop-api", "public")));
+app.use("/shop-api", shopApiRouter);
 
 if (process.argv[1] !== undefined && import.meta.url.endsWith("index.js")) {
   app.listen(PORT, () => {

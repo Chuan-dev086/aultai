@@ -86,6 +86,34 @@ import { z } from "zod";
  * @property {boolean} reverted
  */
 
+/**
+ * @typedef {Object} GeneratedTestCase
+ * @property {string} name
+ * @property {string} code
+ */
+
+/**
+ * @typedef {Object} GenerateTestsResponse
+ * @property {GeneratedTestCase[]} tests
+ */
+
+/**
+ * @typedef {Object} SingleTestResult
+ * @property {string} name
+ * @property {"passed" | "failed"} status
+ * @property {number} duration_ms
+ * @property {string | null} error
+ */
+
+/**
+ * @typedef {Object} TestRunResult
+ * @property {number} total
+ * @property {number} passed
+ * @property {number} failed
+ * @property {number} duration_ms
+ * @property {SingleTestResult[]} tests
+ */
+
 export const NodeSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -163,4 +191,28 @@ export const ApplyResponseSchema = z.object({
 
 export const RevertResponseSchema = z.object({
   reverted: z.literal(true),
+});
+
+export const GeneratedTestCaseSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+});
+
+export const GenerateTestsResponseSchema = z.object({
+  tests: z.array(GeneratedTestCaseSchema),
+});
+
+export const SingleTestResultSchema = z.object({
+  name: z.string(),
+  status: z.enum(["passed", "failed"]),
+  duration_ms: z.number(),
+  error: z.string().nullable(),
+});
+
+export const TestRunResultSchema = z.object({
+  total: z.number(),
+  passed: z.number(),
+  failed: z.number(),
+  duration_ms: z.number(),
+  tests: z.array(SingleTestResultSchema),
 });

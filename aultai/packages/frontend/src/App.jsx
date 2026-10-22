@@ -5,6 +5,8 @@ import CodeGraph from "./components/CodeGraph.jsx";
 import NodeInspector from "./components/NodeInspector.jsx";
 import IssuesPanel from "./components/IssuesPanel.jsx";
 import FixReview from "./components/FixReview.jsx";
+import TestLab from "./components/TestLab.jsx";
+import PreviewLab from "./components/PreviewLab.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -20,6 +22,7 @@ export default function App() {
   const [rightTab, setRightTab] = useState("inspector");
   const [activeFixIssue, setActiveFixIssue] = useState(null);
   const [banner, setBanner] = useState(null);
+  const [mainTab, setMainTab] = useState("graph");
 
   useEffect(() => {
     let cancelled = false;
@@ -203,15 +206,37 @@ export default function App() {
         <aside className="w-[260px] shrink-0 overflow-y-auto border-r border-slate-800">
           <FileTree files={project.files} activeFile={activeFile} onFileClick={onFileClick} />
         </aside>
-        <main className="min-w-0 flex-1">
-          <CodeGraph
-            nodes={graph.nodes}
-            edges={graph.edges}
-            activeFile={activeFile}
-            selectedNodeId={selectedNodeId}
-            onNodeClick={onNodeClick}
-            onClearSelection={onClearSelection}
-          />
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="flex gap-1 border-b border-slate-800 p-2">
+            {[
+              ["graph", "Graph"],
+              ["tests", "Tests"],
+              ["preview", "Preview"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMainTab(id)}
+                className={`rounded px-2 py-1 text-sm ${mainTab === id ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {mainTab === "graph" && (
+              <CodeGraph
+                nodes={graph.nodes}
+                edges={graph.edges}
+                activeFile={activeFile}
+                selectedNodeId={selectedNodeId}
+                onNodeClick={onNodeClick}
+                onClearSelection={onClearSelection}
+              />
+            )}
+            {mainTab === "tests" && <TestLab />}
+            {mainTab === "preview" && <PreviewLab />}
+          </div>
         </main>
         <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">
           <div className="flex gap-1 border-b border-slate-800 p-2">

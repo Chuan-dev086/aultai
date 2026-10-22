@@ -7,6 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": "http://localhost:3000",
+      "/shop-api": "http://localhost:3000",
+      "/preview": "http://localhost:3000",
     },
   },
 });

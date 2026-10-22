@@ -138,3 +138,27 @@ export async function revertFix(issueId) {
   }
   return res.json();
 }
+
+/**
+ * Generate a regression test suite (mock; writes test_generated.test.js).
+ * @returns {Promise<import("../types.js").GenerateTestsResponse>} Generated tests.
+ */
+export async function generateTests() {
+  const res = await fetch(`${BASE}/tests/generate`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "generateTests");
+  }
+  return res.json();
+}
+
+/**
+ * Run the shop-api Vitest suite and return per-test results.
+ * @returns {Promise<import("../types.js").TestRunResult>} Test run results.
+ */
+export async function runTests() {
+  const res = await fetch(`${BASE}/tests/run`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "runTests");
+  }
+  return res.json();
+}

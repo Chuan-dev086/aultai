@@ -75,4 +75,32 @@
  * @property {"low" | "medium" | "high"} risk
  */
 
+/**
+ * @typedef {Object} GeneratedTestCase
+ * @property {string} name
+ * @property {string} code
+ */
+
+/**
+ * @typedef {Object} GenerateTestsResponse
+ * @property {GeneratedTestCase[]} tests
+ */
+
+/**
+ * @typedef {Object} SingleTestResult
+ * @property {string} name
+ * @property {"passed" | "failed"} status
+ * @property {number} duration_ms
+ * @property {string | null} error
+ */
+
+/**
+ * @typedef {Object} TestRunResult
+ * @property {number} total
+ * @property {number} passed
+ * @property {number} failed
+ * @property {number} duration_ms
+ * @property {SingleTestResult[]} tests
+ */
+
 export {};

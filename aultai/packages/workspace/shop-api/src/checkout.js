@@ -37,7 +37,8 @@ export function calculateCheckoutTotal(cart, voucher, now) {
     const discount = (discountableSubtotal * voucher.value) / 100;
     return roundToCents(discountableSubtotal + taxAmount + shippingAmount - discount);
   }
-  const total = discountableSubtotal + taxAmount + shippingAmount - voucher.value;
+  const discount = Math.min(voucher.value, discountableSubtotal);
+  const total = Math.max(0, discountableSubtotal + taxAmount + shippingAmount - discount);
   return roundToCents(total);
 }
 
