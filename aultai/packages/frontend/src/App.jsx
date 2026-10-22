@@ -54,6 +54,16 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      selectedNodeId !== null &&
+      graph !== null &&
+      !graph.nodes.some((node) => node.id === selectedNodeId)
+    ) {
+      setSelectedNodeId(null);
+    }
+  }, [graph, selectedNodeId]);
+
   /**
    * Select a file in the tree (null clears the filter).
    * @param {string | null} path File path or null.
@@ -89,14 +99,23 @@ export default function App() {
     setActiveProject(info);
     setActiveFile(null);
     setSelectedNodeId(null);
+    setSelectedIssueId(null);
+    setActiveFixIssue(null);
+    setIssues([]);
+    setAnalyzeMode(null);
     try {
       const [proj, g, analysis] = await Promise.all([loadProject(), fetchGraph(), analyze()]);
       setProject(proj);
       setGraph(g);
       setIssues(analysis.issues);
       setAnalyzeMode(analysis.mode);
-    } catch {
-      // Keep the previous graph on reload failure; the banner stays accurate.
+      setBanner(null);
+    } catch (err) {
+      setBanner({
+        message: `Could not switch to ${info.name}: ${err.message}. The previous project data is still shown.`,
+        issueId: null,
+        tone: "error",
+      });
     }
   }
 
@@ -170,6 +189,9 @@ export default function App() {
     if (activeFixIssue !== null) {
       return "review";
     }
+    if (analyzeMode !== null) {
+      return "diagnose";
+    }
     return "explore";
   }
 
@@ -180,12 +202,16 @@ export default function App() {
    */
   async function onFixApplied(issue) {
     setActiveFixIssue(null);
-    setBanner({ message: `Fix applied for ${issue.id}`, issueId: issue.id });
     try {
       const g = await fetchGraph();
       setGraph(g);
-    } catch {
-      // Banner stays even if the graph refresh fails.
+      setBanner({ message: `Fix applied for ${issue.id}`, issueId: issue.id });
+    } catch (err) {
+      setBanner({
+        message: `Fix applied for ${issue.id}, but the code graph could not refresh: ${err.message}. The displayed graph may be outdated.`,
+        issueId: issue.id,
+        tone: "warning",
+      });
     }
   }
 
@@ -197,13 +223,23 @@ export default function App() {
     if (banner === null) {
       return;
     }
+    const issueId = banner.issueId;
     try {
-      await revertFix(banner.issueId);
+      await revertFix(issueId);
+    } catch (err) {
+      setBanner({ message: `Undo failed: ${err.message}`, issueId, tone: "error" });
+      return;
+    }
+    try {
       const g = await fetchGraph();
       setGraph(g);
-      setBanner({ message: `Fix reverted for ${banner.issueId}`, issueId: null });
+      setBanner({ message: `Fix reverted for ${issueId}`, issueId: null, tone: "success" });
     } catch (err) {
-      setBanner({ message: `Revert failed: ${err.message}`, issueId: null });
+      setBanner({
+        message: `Fix reverted for ${issueId}, but the code graph could not refresh: ${err.message}. The displayed graph may be outdated.`,
+        issueId: null,
+        tone: "warning",
+      });
     }
   }
 
@@ -247,7 +283,13 @@ export default function App() {
         </button>
       </header>
       {banner !== null && (
-        <div className="flex items-center gap-3 border-b border-green-800 bg-green-950 px-4 py-1 text-sm text-green-200">
+        <div className={`flex items-center gap-3 border-b px-4 py-1 text-sm ${
+          banner.tone === "error"
+            ? "border-red-800 bg-red-950 text-red-200"
+            : banner.tone === "warning"
+              ? "border-amber-800 bg-amber-950 text-amber-200"
+              : "border-green-800 bg-green-950 text-green-200"
+        }`}>
           <span>{banner.message}</span>
           {banner.issueId !== null && (
             <button
@@ -261,7 +303,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setBanner(null)}
-            className="text-xs text-green-400 hover:underline"
+            className="text-xs underline"
           >
             Dismiss
           </button>
@@ -339,6 +381,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded border border-slate-700 bg-slate-900">
             <FixReview
+              key={activeFixIssue.id}
               issue={activeFixIssue}
               onNodeClick={(id) => {
                 onNodeClick(id);

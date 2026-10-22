@@ -18,19 +18,22 @@ const RISK_STYLE = {
  * @returns {import("react").JSX.Element} The fix review panel.
  */
 export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
-  const [proposal, setProposal] = useState(null);
+  const [proposalState, setProposalState] = useState(null);
+  const proposal = proposalState?.issueId === issue.id ? proposalState.value : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [applying, setApplying] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setProposalState(null);
     setLoading(true);
     setError(null);
+    setApplying(false);
     generateFix(issue.id)
       .then((p) => {
         if (!cancelled) {
-          setProposal(p);
+          setProposalState({ issueId: issue.id, value: p });
           setLoading(false);
         }
       })
@@ -84,6 +87,10 @@ export default function FixReview({ issue, onNodeClick, onClose, onApplied }) {
         </button>
       </div>
     );
+  }
+
+  if (proposal === null) {
+    return null;
   }
 
   return (

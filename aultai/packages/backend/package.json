@@ -6,7 +6,8 @@
   "description": "AultAI backend skeleton (Phase 0)",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@babel/parser": "^7.24.0",

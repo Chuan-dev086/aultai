@@ -1,5 +1,4 @@
 import express from "express";
-import cors from "cors";
 import path from "node:path";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
@@ -20,7 +19,29 @@ import {
 
 export const app = express();
 
-app.use(cors());
+const LOCAL_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]);
+
+app.use("/api", (req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    next();
+    return;
+  }
+  const origin = req.get("origin");
+  const fetchSite = req.get("sec-fetch-site");
+  if (
+    (origin !== undefined && !LOCAL_ORIGINS.has(origin)) ||
+    fetchSite === "cross-site"
+  ) {
+    res.status(403).json({
+      error: { code: "LOCAL_ORIGIN_REQUIRED", message: "API mutations are only available to the local AultAI frontend." },
+    });
+    return;
+  }
+  next();
+});
 
 // Proxy /shop-api/* to the shop-api worker process so that applying fixes
 // (which rewrites shop-api source) takes effect on the next request without
@@ -82,7 +103,7 @@ if (isMain) {
     console.error(`[shop-api] failed to start: ${err.message}`);
   });
 
-  app.listen(PORT, () => {
+  app.listen(PORT, "127.0.0.1", () => {
     // eslint-disable-next-line no-console
     console.log(`AultAI backend listening on port ${PORT}`);
     workerReady.then(() => {

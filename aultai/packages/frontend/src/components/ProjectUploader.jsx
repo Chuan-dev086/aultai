@@ -20,6 +20,20 @@ export default function ProjectUploader({ onProjectChange }) {
   const [error, setError] = useState(null);
   const [status, setStatus] = useState(null);
 
+  function selectZip(candidate) {
+    if (candidate === undefined || candidate === null) {
+      setFile(null);
+      return;
+    }
+    if (!candidate.name.toLowerCase().endsWith(".zip")) {
+      setFile(null);
+      setError(new Error("Only .zip files are accepted."));
+      return;
+    }
+    setError(null);
+    setFile(candidate);
+  }
+
   useEffect(() => {
     let cancelled = false;
     fetchProjectStatus()
@@ -28,7 +42,11 @@ export default function ProjectUploader({ onProjectChange }) {
           setStatus(s);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -49,9 +67,12 @@ export default function ProjectUploader({ onProjectChange }) {
       const out = await uploadProject(file);
       setMessage(out.message);
       setPhase("uploaded");
-      const s = await fetchProjectStatus();
-      setStatus(s);
       onProjectChange({ name: "dynamic_project", port: null });
+      try {
+        setStatus(await fetchProjectStatus());
+      } catch (err) {
+        setError(new Error(`Project uploaded, but its status could not be refreshed: ${err.message}`));
+      }
     } catch (err) {
       setError(err);
       setPhase("idle");
@@ -101,7 +122,7 @@ export default function ProjectUploader({ onProjectChange }) {
   async function onSwitchBack() {
     setError(null);
     try {
-      await stopUploadedProject().catch(() => {});
+      await stopUploadedProject();
       const out = await switchToShopApi();
       setMessage(`Active workspace: ${out.active}`);
       setPhase("idle");
@@ -129,7 +150,7 @@ export default function ProjectUploader({ onProjectChange }) {
           ev.preventDefault();
           const dropped = ev.dataTransfer.files?.[0];
           if (dropped !== undefined) {
-            setFile(dropped);
+            selectZip(dropped);
           }
         }}
         className="flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed border-slate-600 bg-slate-900 p-6 text-center"
@@ -141,7 +162,7 @@ export default function ProjectUploader({ onProjectChange }) {
           type="file"
           accept=".zip"
           className="hidden"
-          onChange={(ev) => setFile(ev.target.files?.[0] ?? null)}
+          onChange={(ev) => selectZip(ev.target.files?.[0])}
         />
       </label>
       <div className="flex flex-wrap gap-2">
@@ -175,6 +196,7 @@ export default function ProjectUploader({ onProjectChange }) {
         <button
           type="button"
           onClick={onSwitchBack}
+          disabled={phase === "uploading" || phase === "starting"}
           className="rounded bg-slate-700 px-3 py-1 text-sm text-white hover:bg-slate-600"
         >
           Back to shop-api

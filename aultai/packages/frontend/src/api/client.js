@@ -1,6 +1,26 @@
 const BASE = "/api";
 
 /**
+ * Make an API request and provide a useful error when the backend is unreachable.
+ * @param {string} url Request URL.
+ * @param {RequestInit} [options] Fetch options.
+ * @param {string} endpoint Endpoint label used in the error.
+ * @returns {Promise<Response>} Fetch response.
+ */
+async function apiFetch(url, options, endpoint) {
+  try {
+    return await fetch(url, options);
+  } catch (cause) {
+    const err = new Error(
+      `Could not reach the AultAI backend for ${endpoint}. Check that it is running and retry.`,
+    );
+    err.code = "BACKEND_UNAVAILABLE";
+    err.cause = cause;
+    throw err;
+  }
+}
+
+/**
  * Parse a non-2xx response body into a { code, message } error and throw it.
  * @param {Response} res Fetch response with non-2xx status.
  * @param {string} endpoint Endpoint label used when the body has no message.
@@ -10,13 +30,15 @@ async function throwApiError(res, endpoint) {
   let code = "REQUEST_FAILED";
   let message = `${endpoint} failed with status ${res.status}`;
   try {
-    const body = await res.json();
+    const rawBody = await res.text();
+    const body = rawBody.length === 0 ? null : JSON.parse(rawBody);
     if (body !== null && typeof body === "object" && body.error !== undefined) {
       code = body.error.code ?? code;
       message = body.error.message ?? message;
     }
   } catch {
-    // Keep the default message when the body is not JSON.
+    code = "INVALID_ERROR_RESPONSE";
+    message = `${endpoint} failed with status ${res.status} and returned an invalid error response.`;
   }
   const err = new Error(message);
   err.code = code;
@@ -25,15 +47,32 @@ async function throwApiError(res, endpoint) {
 }
 
 /**
+ * Parse a successful API response and report malformed JSON with endpoint context.
+ * @param {Response} res Successful fetch response.
+ * @param {string} endpoint Endpoint label used in the error.
+ * @returns {Promise<any>} Parsed response body.
+ */
+async function parseJsonResponse(res, endpoint) {
+  try {
+    return await res.json();
+  } catch (cause) {
+    const err = new Error(`${endpoint} returned an invalid JSON response.`);
+    err.code = "INVALID_RESPONSE";
+    err.cause = cause;
+    throw err;
+  }
+}
+
+/**
  * Load project summary: files plus node/edge counts.
  * @returns {Promise<import("../types.js").ProjectInfo>} The project info.
  */
 export async function loadProject() {
-  const res = await fetch(`${BASE}/project/load`);
+  const res = await apiFetch(`${BASE}/project/load`, undefined, "loadProject");
   if (!res.ok) {
     await throwApiError(res, "loadProject");
   }
-  return res.json();
+  return parseJsonResponse(res, "loadProject");
 }
 
 /**
@@ -44,11 +83,15 @@ export async function loadProject() {
 export async function uploadProject(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/project/upload`, { method: "POST", body: form });
+  const res = await apiFetch(
+    `${BASE}/project/upload`,
+    { method: "POST", body: form },
+    "uploadProject",
+  );
   if (!res.ok) {
     await throwApiError(res, "uploadProject");
   }
-  return res.json();
+  return parseJsonResponse(res, "uploadProject");
 }
 
 /**
@@ -56,11 +99,11 @@ export async function uploadProject(file) {
  * @returns {Promise<{ port: number, pid: number | null }>} Port and pid.
  */
 export async function startUploadedProject() {
-  const res = await fetch(`${BASE}/project/start`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/project/start`, { method: "POST" }, "startUploadedProject");
   if (!res.ok) {
     await throwApiError(res, "startUploadedProject");
   }
-  return res.json();
+  return parseJsonResponse(res, "startUploadedProject");
 }
 
 /**
@@ -68,11 +111,11 @@ export async function startUploadedProject() {
  * @returns {Promise<{ stopped: boolean }>} Whether a process was stopped.
  */
 export async function stopUploadedProject() {
-  const res = await fetch(`${BASE}/project/stop`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/project/stop`, { method: "POST" }, "stopUploadedProject");
   if (!res.ok) {
     await throwApiError(res, "stopUploadedProject");
   }
-  return res.json();
+  return parseJsonResponse(res, "stopUploadedProject");
 }
 
 /**
@@ -80,11 +123,11 @@ export async function stopUploadedProject() {
  * @returns {Promise<{ active: string }>} The active workspace.
  */
 export async function switchToShopApi() {
-  const res = await fetch(`${BASE}/project/switch`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/project/switch`, { method: "POST" }, "switchToShopApi");
   if (!res.ok) {
     await throwApiError(res, "switchToShopApi");
   }
-  return res.json();
+  return parseJsonResponse(res, "switchToShopApi");
 }
 
 /**
@@ -92,11 +135,11 @@ export async function switchToShopApi() {
  * @returns {Promise<{ active: string, port: number, running: boolean }>} Status.
  */
 export async function fetchProjectStatus() {
-  const res = await fetch(`${BASE}/project/status`);
+  const res = await apiFetch(`${BASE}/project/status`, undefined, "fetchProjectStatus");
   if (!res.ok) {
     await throwApiError(res, "fetchProjectStatus");
   }
-  return res.json();
+  return parseJsonResponse(res, "fetchProjectStatus");
 }
 
 /**
@@ -104,11 +147,11 @@ export async function fetchProjectStatus() {
  * @returns {Promise<import("../types.js").GraphData>} Nodes and edges.
  */
 export async function fetchGraph() {
-  const res = await fetch(`${BASE}/graph`);
+  const res = await apiFetch(`${BASE}/graph`, undefined, "fetchGraph");
   if (!res.ok) {
     await throwApiError(res, "fetchGraph");
   }
-  return res.json();
+  return parseJsonResponse(res, "fetchGraph");
 }
 
 /**
@@ -117,11 +160,11 @@ export async function fetchGraph() {
  * @returns {Promise<import("../types.js").NodeDetail>} The node detail.
  */
 export async function fetchNode(id) {
-  const res = await fetch(`${BASE}/node/${encodeURIComponent(id)}`);
+  const res = await apiFetch(`${BASE}/node/${encodeURIComponent(id)}`, undefined, "fetchNode");
   if (!res.ok) {
     await throwApiError(res, "fetchNode");
   }
-  return res.json();
+  return parseJsonResponse(res, "fetchNode");
 }
 
 /**
@@ -129,11 +172,11 @@ export async function fetchNode(id) {
  * @returns {Promise<import("../types.js").AnalyzeResponse>} Issues and mode.
  */
 export async function analyze() {
-  const res = await fetch(`${BASE}/analyze`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/analyze`, { method: "POST" }, "analyze");
   if (!res.ok) {
     await throwApiError(res, "analyze");
   }
-  return res.json();
+  return parseJsonResponse(res, "analyze");
 }
 
 /**
@@ -142,13 +185,15 @@ export async function analyze() {
  * @returns {Promise<{ explanation: string }>} The explanation.
  */
 export async function explainNode(id) {
-  const res = await fetch(`${BASE}/node/${encodeURIComponent(id)}/explain`, {
-    method: "POST",
-  });
+  const res = await apiFetch(
+    `${BASE}/node/${encodeURIComponent(id)}/explain`,
+    { method: "POST" },
+    "explainNode",
+  );
   if (!res.ok) {
     await throwApiError(res, "explainNode");
   }
-  return res.json();
+  return parseJsonResponse(res, "explainNode");
 }
 
 /**
@@ -157,15 +202,19 @@ export async function explainNode(id) {
  * @returns {Promise<import("../types.js").FixProposal>} The fix proposal.
  */
 export async function generateFix(issueId) {
-  const res = await fetch(`${BASE}/fix`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ issueId }),
-  });
+  const res = await apiFetch(
+    `${BASE}/fix`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ issueId }),
+    },
+    "generateFix",
+  );
   if (!res.ok) {
     await throwApiError(res, "generateFix");
   }
-  return res.json();
+  return parseJsonResponse(res, "generateFix");
 }
 
 /**
@@ -174,15 +223,19 @@ export async function generateFix(issueId) {
  * @returns {Promise<{ applied: true, backupPath: string }>} Apply result.
  */
 export async function applyFix(issueId) {
-  const res = await fetch(`${BASE}/fix/apply`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ issueId }),
-  });
+  const res = await apiFetch(
+    `${BASE}/fix/apply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ issueId }),
+    },
+    "applyFix",
+  );
   if (!res.ok) {
     await throwApiError(res, "applyFix");
   }
-  return res.json();
+  return parseJsonResponse(res, "applyFix");
 }
 
 /**
@@ -191,15 +244,19 @@ export async function applyFix(issueId) {
  * @returns {Promise<{ reverted: true }>} Revert result.
  */
 export async function revertFix(issueId) {
-  const res = await fetch(`${BASE}/fix/revert`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ issueId }),
-  });
+  const res = await apiFetch(
+    `${BASE}/fix/revert`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ issueId }),
+    },
+    "revertFix",
+  );
   if (!res.ok) {
     await throwApiError(res, "revertFix");
   }
-  return res.json();
+  return parseJsonResponse(res, "revertFix");
 }
 
 /**
@@ -207,11 +264,11 @@ export async function revertFix(issueId) {
  * @returns {Promise<import("../types.js").GenerateTestsResponse>} Generated tests.
  */
 export async function generateTests() {
-  const res = await fetch(`${BASE}/tests/generate`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/tests/generate`, { method: "POST" }, "generateTests");
   if (!res.ok) {
     await throwApiError(res, "generateTests");
   }
-  return res.json();
+  return parseJsonResponse(res, "generateTests");
 }
 
 /**
@@ -219,11 +276,11 @@ export async function generateTests() {
  * @returns {Promise<import("../types.js").TestRunResult>} Test run results.
  */
 export async function runTests() {
-  const res = await fetch(`${BASE}/tests/run`, { method: "POST" });
+  const res = await apiFetch(`${BASE}/tests/run`, { method: "POST" }, "runTests");
   if (!res.ok) {
     await throwApiError(res, "runTests");
   }
-  return res.json();
+  return parseJsonResponse(res, "runTests");
 }
 
 /**
@@ -237,15 +294,19 @@ export async function runTests() {
  * @returns {Promise<import("../types.js").PerfResult>} Perf numbers.
  */
 export async function runPerfTest(config) {
-  const res = await fetch(`${BASE}/perf/run`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(config ?? {}),
-  });
+  const res = await apiFetch(
+    `${BASE}/perf/run`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(config ?? {}),
+    },
+    "runPerfTest",
+  );
   if (!res.ok) {
     await throwApiError(res, "runPerfTest");
   }
-  return res.json();
+  return parseJsonResponse(res, "runPerfTest");
 }
 
 /**
@@ -253,9 +314,9 @@ export async function runPerfTest(config) {
  * @returns {Promise<import("../types.js").PerfResult>} Last perf numbers.
  */
 export async function fetchLastPerf() {
-  const res = await fetch(`${BASE}/perf/last`);
+  const res = await apiFetch(`${BASE}/perf/last`, undefined, "fetchLastPerf");
   if (!res.ok) {
     await throwApiError(res, "fetchLastPerf");
   }
-  return res.json();
+  return parseJsonResponse(res, "fetchLastPerf");
 }

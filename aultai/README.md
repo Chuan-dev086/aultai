@@ -46,5 +46,6 @@ Follow the DemoStepper in the top bar:
 
 ## Notes
 
+- **Local-only backend:** The backend binds to `127.0.0.1` and rejects API mutations from non-local browser origins. Do not expose it through a network proxy: uploading or starting a project runs scripts from that project with the backend user's permissions. Only upload projects you trust.
 - **MOCK MODE:** Without `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, all AI calls (`llm.js`) return deterministic offline responses — the demo works fully offline. Set either key to attempt live provider calls (failures fall back to mock, never throw).
 - **Safety rules:** AultAI never auto-applies fixes (apply is an explicit user action with `.bak` backup + revert), never `eval`s analyzed code (parsing is `@babel/parser` only), and runs Vitest in a child process, never in-process.

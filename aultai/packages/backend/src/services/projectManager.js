@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
+import { connect, createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import nodeFs from "node:fs";
 import path from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import unzipper from "unzipper";
 import treeKill from "tree-kill";
 import { WORKSPACE_DIR } from "../config.js";
@@ -14,11 +17,17 @@ import { setActiveWorkspace } from "./sandbox.js";
 export const DYNAMIC_PORT = 3001;
 const DYNAMIC_SUBDIR = "dynamic_project";
 const TIMEOUT_MS = 300000;
+const STOP_TIMEOUT_MS = 10000;
+const MAX_ARCHIVE_ENTRIES = 10000;
+const MAX_ARCHIVE_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 
 /** @type {import("node:child_process").ChildProcess | null} */
 let dynamicChild = null;
 /** @type {number | null} */
 let dynamicPort = null;
+/** @type {Promise<{ port: number, pid: number | undefined }> | null} */
+let dynamicStarting = null;
 
 /**
  * Extract an uploaded zip into packages/workspace/dynamic_project (cleared
@@ -32,25 +41,112 @@ export async function uploadProject(zipFilePath) {
   await fs.rm(target, { recursive: true, force: true });
   await fs.mkdir(target, { recursive: true });
   try {
-    await nodeFs
-      .createReadStream(zipFilePath)
-      .pipe(unzipper.Extract({ path: target }))
-      .promise();
+    const archive = await unzipper.Open.file(zipFilePath);
+    await extractArchive(archive, target);
+    if (!(await hasPackageJson(target))) {
+      await flattenSingleSubdir(target);
+    }
+    if (!(await hasPackageJson(target))) {
+      throw uploadError("Uploaded project must contain a package.json at its root");
+    }
   } catch (err) {
+    await fs.rm(target, { recursive: true, force: true });
+    if (err.code === "UPLOAD_FAILED") {
+      throw err;
+    }
     throw uploadError(`Failed to extract zip: ${err.message}`);
-  }
-  if (!(await hasPackageJson(target))) {
-    await flattenSingleSubdir(target);
-  }
-  if (!(await hasPackageJson(target))) {
-    throw uploadError("Uploaded project must contain a package.json at its root");
   }
   setActiveWorkspace(DYNAMIC_SUBDIR);
   return {
     success: true,
-    message: "Project uploaded. Run install, then start.",
+    message: "Project uploaded successfully.",
     path: DYNAMIC_SUBDIR,
   };
+}
+
+/**
+ * Validate and extract an archive while enforcing path and expansion limits.
+ * @param {import("unzipper").Open.Directory} archive Parsed ZIP archive.
+ * @param {string} target Absolute extraction root.
+ * @returns {Promise<void>} Resolves after every allowed entry is extracted.
+ * @throws {Error} When an archive entry is unsafe or exceeds a limit.
+ */
+async function extractArchive(archive, target) {
+  if (archive.files.length > MAX_ARCHIVE_ENTRIES) {
+    throw uploadError(`ZIP contains more than ${MAX_ARCHIVE_ENTRIES} entries`);
+  }
+  let declaredTotalBytes = 0;
+  const validatedEntries = archive.files.map((entry) => {
+    const destination = archiveEntryPath(target, entry.path);
+    if (entry.type !== "File" && entry.type !== "Directory") {
+      throw uploadError(`Unsupported ZIP entry type: ${entry.type}`);
+    }
+    const size = entry.uncompressedSize;
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw uploadError(`Invalid uncompressed size for ZIP entry: ${entry.path}`);
+    }
+    if (entry.type === "File" && size > MAX_ARCHIVE_FILE_BYTES) {
+      throw uploadError(`ZIP entry exceeds the ${MAX_ARCHIVE_FILE_BYTES} byte file limit`);
+    }
+    declaredTotalBytes += entry.type === "File" ? size : 0;
+    if (declaredTotalBytes > MAX_ARCHIVE_BYTES) {
+      throw uploadError(`ZIP expands beyond the ${MAX_ARCHIVE_BYTES} byte limit`);
+    }
+    return { entry, destination };
+  });
+
+  let extractedBytes = 0;
+  for (const { entry, destination } of validatedEntries) {
+    if (entry.type === "Directory") {
+      await fs.mkdir(destination, { recursive: true });
+      continue;
+    }
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    let entryBytes = 0;
+    const limit = new Transform({
+      transform(chunk, encoding, callback) {
+        entryBytes += chunk.length;
+        extractedBytes += chunk.length;
+        if (entryBytes > MAX_ARCHIVE_FILE_BYTES || extractedBytes > MAX_ARCHIVE_BYTES) {
+          callback(uploadError("ZIP expanded beyond the extraction limits"));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(
+      entry.stream(),
+      limit,
+      nodeFs.createWriteStream(destination, { flags: "wx" }),
+    );
+  }
+}
+
+/**
+ * Resolve a ZIP entry path and reject absolute or traversing paths.
+ * @param {string} target Absolute extraction root.
+ * @param {string} entryPath Untrusted path from the archive.
+ * @returns {string} Resolved destination inside the extraction root.
+ * @throws {Error} When the entry path is invalid or escapes the root.
+ */
+function archiveEntryPath(target, entryPath) {
+  const normalized = entryPath.replace(/\\/g, "/");
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  if (
+    normalized.length === 0 ||
+    normalized.startsWith("/") ||
+    /^[a-zA-Z]:/.test(normalized) ||
+    normalized.includes("\0") ||
+    segments.length === 0 ||
+    segments.some((segment) => segment === "." || segment === "..")
+  ) {
+    throw uploadError(`Unsafe ZIP entry path: ${entryPath}`);
+  }
+  const destination = path.resolve(target, ...segments);
+  if (destination === target || !destination.startsWith(target + path.sep)) {
+    throw uploadError(`ZIP entry escapes the extraction directory: ${entryPath}`);
+  }
+  return destination;
 }
 
 /**
@@ -96,15 +192,36 @@ export function installDeps() {
  * @throws {Error} When the project was never uploaded or fails to bind.
  */
 export async function startProject() {
+  if (dynamicStarting !== null) {
+    return dynamicStarting;
+  }
   if (dynamicChild !== null) {
     return { port: dynamicPort ?? DYNAMIC_PORT, pid: dynamicChild.pid };
   }
+  const startAttempt = startDynamicProject();
+  dynamicStarting = startAttempt;
+  try {
+    return await startAttempt;
+  } finally {
+    if (dynamicStarting === startAttempt) {
+      dynamicStarting = null;
+    }
+  }
+}
+
+/**
+ * Spawn the uploaded project and wait until it accepts connections.
+ * @returns {Promise<{ port: number, pid: number | undefined }>} Port and pid.
+ * @throws {Error} When no project exists or it fails to bind.
+ */
+async function startDynamicProject() {
   const cwd = path.resolve(WORKSPACE_DIR, DYNAMIC_SUBDIR);
   try {
     await fs.stat(path.join(cwd, "package.json"));
   } catch {
     throw uploadError("No dynamic project uploaded yet");
   }
+  await ensurePortAvailable(DYNAMIC_PORT);
   const child = spawn("npm", ["start"], {
     cwd,
     shell: process.platform === "win32",
@@ -123,24 +240,61 @@ export async function startProject() {
       dynamicPort = null;
     }
   });
-  await waitForPort(DYNAMIC_PORT, 30000);
+  try {
+    await waitForPort(DYNAMIC_PORT, 30000, child);
+  } catch (err) {
+    try {
+      await stopProject();
+    } catch (stopErr) {
+      throw uploadError(`${err.message}; failed to stop the project after startup failure: ${stopErr.message}`);
+    }
+    throw err;
+  }
   return { port: DYNAMIC_PORT, pid: child.pid };
 }
 
 /**
  * Stop the dynamic background project via tree-kill (kills the process tree).
- * @returns {{ stopped: boolean }} Whether a process was stopped.
+ * @returns {Promise<{ stopped: boolean }>} Whether a process was stopped.
  */
-export function stopProject() {
-  if (dynamicChild === null || dynamicChild.pid === undefined) {
-    dynamicChild = null;
-    dynamicPort = null;
+export async function stopProject() {
+  const child = dynamicChild;
+  if (child === null || child.pid === undefined) {
     return { stopped: false };
   }
-  const pid = dynamicChild.pid;
-  dynamicChild = null;
-  dynamicPort = null;
-  treeKill(pid);
+  if (child.exitCode !== null || child.signalCode !== null) {
+    if (dynamicChild === child) {
+      dynamicChild = null;
+      dynamicPort = null;
+    }
+    return { stopped: false };
+  }
+  await new Promise((resolve, reject) => {
+    treeKill(child.pid, (err) => {
+      if (err?.code === "ESRCH") {
+        resolve();
+      } else if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+  if (child.exitCode === null && child.signalCode === null) {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(uploadError("Dynamic project did not exit after the stop request"));
+      }, STOP_TIMEOUT_MS);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+  if (dynamicChild === child) {
+    dynamicChild = null;
+    dynamicPort = null;
+  }
   return { stopped: true };
 }
 
@@ -169,15 +323,18 @@ export function projectStatus() {
  * Poll until a TCP port accepts connections or the timeout elapses.
  * @param {number} port Port to probe.
  * @param {number} timeoutMs Max wait.
+ * @param {import("node:child_process").ChildProcess} child Started project process.
  * @returns {Promise<void>}
  * @throws {Error} On timeout.
  */
-async function waitForPort(port, timeoutMs) {
-  const net = await import("node:net");
+async function waitForPort(port, timeoutMs, child) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+      throw uploadError(`Dynamic project exited before binding port ${port}`);
+    }
     const open = await new Promise((resolve) => {
-      const socket = net.connect(port, "127.0.0.1");
+      const socket = connect(port, "127.0.0.1");
       socket.on("connect", () => {
         socket.end();
         resolve(true);
@@ -192,6 +349,28 @@ async function waitForPort(port, timeoutMs) {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+/**
+ * Ensure the dynamic project port is free before starting the child process.
+ * @param {number} port Port to reserve-check.
+ * @returns {Promise<void>} Resolves when the port can be bound.
+ * @throws {Error} When the port is already in use or cannot be checked.
+ */
+async function ensurePortAvailable(port) {
+  await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        reject(uploadError(`Port ${port} is already in use`));
+      } else {
+        reject(err);
+      }
+    });
+    server.listen(port, "127.0.0.1", () => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
 }
 
 /**

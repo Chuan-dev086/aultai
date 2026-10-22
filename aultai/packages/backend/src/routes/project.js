@@ -17,27 +17,48 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
 });
 
-/**
- * Upload a .zip project, extract it, then install deps asynchronously.
- */
-projectRouter.post("/project/upload", upload.single("file"), async (req, res) => {
-  try {
-    if (req.file === undefined) {
-      res.status(400).json({ error: { code: "NO_FILE", message: "No file uploaded" } });
+function parseUploadedFile(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      const tooLarge = err.code === "LIMIT_FILE_SIZE";
+      res.status(tooLarge ? 413 : 400).json({
+        error: {
+          code: err.code ?? "INVALID_UPLOAD",
+          message: tooLarge ? "Upload exceeds the 50 MB limit" : err.message,
+        },
+      });
       return;
     }
-    if (!req.file.originalname.endsWith(".zip")) {
+    next();
+  });
+}
+
+/**
+ * Upload a .zip project, extract it, and install dependencies.
+ */
+projectRouter.post("/project/upload", parseUploadedFile, async (req, res) => {
+  if (req.file === undefined) {
+    res.status(400).json({ error: { code: "NO_FILE", message: "No file uploaded" } });
+    return;
+  }
+  try {
+    if (!req.file.originalname.toLowerCase().endsWith(".zip")) {
       res.status(400).json({ error: { code: "NOT_ZIP", message: "Only .zip files are accepted" } });
       return;
     }
     const info = await uploadProject(req.file.path);
-    await fs.unlink(req.file.path).catch(() => {});
-    installDeps()
-      .then(() => {})
-      .catch(() => {});
-    res.json({ success: true, message: `${info.message} Installing dependencies in the background.`, path: info.path });
+    await installDeps();
+    res.json({ success: true, message: "Project uploaded and dependencies installed.", path: info.path });
   } catch (err) {
     res.status(500).json({ error: { code: err.code ?? "UPLOAD_FAILED", message: err.message } });
+  } finally {
+    try {
+      await fs.unlink(req.file.path);
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        console.error(`[project] failed to remove upload temp file: ${err.message}`);
+      }
+    }
   }
 });
 
@@ -56,9 +77,9 @@ projectRouter.post("/project/start", async (req, res) => {
 /**
  * Stop the background dynamic project.
  */
-projectRouter.post("/project/stop", (req, res) => {
+projectRouter.post("/project/stop", async (req, res) => {
   try {
-    res.json(stopProject());
+    res.json(await stopProject());
   } catch (err) {
     res.status(500).json({ error: { code: "STOP_FAILED", message: err.message } });
   }
