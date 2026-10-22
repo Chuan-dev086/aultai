@@ -1,11 +1,13 @@
 # AGENTS.md — AultAI Shared Project Context (Node / Express / JavaScript Edition)
 
 ## Project Identity
+
 AultAI is an AI-assisted software development tool prototype that helps engineers
 understand code, locate bugs, review AI-generated fixes, automate regression testing,
 and measure performance. The demo subject is a small e-commerce checkout backend.
 
 ## Tech Stack (mandatory — do not substitute)
+
 - Language: plain JavaScript (ESM, `.js` / `.jsx`), Node 20 LTS.
   NO TypeScript, NO `.ts` / `.tsx` files, NO `tsconfig.json`, NO `tsc` in the
   toolchain, NO type annotations in code.
@@ -24,66 +26,74 @@ and measure performance. The demo subject is a small e-commerce checkout backend
 - AI: a single provider-agnostic `llm.js` with a MOCK MODE fallback
 
 ## Repository Layout (final shape; created incrementally per phase)
+
 aultai/
-  package.json                    # root, defines npm workspaces
-  AGENTS.md
-  README.md
-  packages/
-    backend/
-      package.json
-      src/
-        index.js                  # Express app entrypoint
-        config.js                 # WORKSPACE_DIR, MOCK_AI, PORT
-        models.js                 # Zod schemas + JSDoc typedefs
-        routes/
-          graph.js  analysis.js  fixes.js  tests.js  perf.js
-        services/
-          parser.js  graphBuilder.js  analyzer.js  fixer.js
-          testgen.js  testrunner.js  perf.js  llm.js  sandbox.js
-    workspace/
-      shop-api/                   # the sample e-commerce app under analysis
-        package.json              # "type": "module"
-        src/
-          models.js  pricing.js  vouchers.js  inventory.js
-          checkout.js  api.js
-        tests/
-          test_checkout.test.js   # ground truth (never modified by AultAI)
-    frontend/
-      package.json
-      vite.config.js
-      tailwind.config.js
-      index.html
-      src/
-        App.jsx
-        api/client.js
-        types.js                  # JSDoc @typedef declarations for API shapes
-        components/
-          CodeGraph.jsx  NodeInspector.jsx  IssuesPanel.jsx
-          FixReview.jsx  DiffViewer.jsx  TestLab.jsx
-          PerfLab.jsx  FileTree.jsx
+package.json # root, defines npm workspaces
+AGENTS.md
+README.md
+packages/
+backend/
+package.json
+src/
+index.js # Express app entrypoint
+config.js # WORKSPACE_DIR, MOCK_AI, PORT
+models.js # Zod schemas + JSDoc typedefs
+routes/
+graph.js analysis.js fixes.js tests.js perf.js
+services/
+parser.js graphBuilder.js analyzer.js fixer.js
+testgen.js testrunner.js perf.js llm.js sandbox.js
+workspace/
+shop-api/ # the sample e-commerce app under analysis
+package.json # "type": "module"
+src/
+models.js pricing.js vouchers.js inventory.js
+checkout.js api.js
+tests/
+test_checkout.test.js # ground truth (never modified by AultAI)
+frontend/
+package.json
+vite.config.js
+tailwind.config.js
+index.html
+src/
+App.jsx
+api/client.js
+types.js # JSDoc @typedef declarations for API shapes
+components/
+CodeGraph.jsx NodeInspector.jsx IssuesPanel.jsx
+FixReview.jsx DiffViewer.jsx TestLab.jsx
+PerfLab.jsx FileTree.jsx
 
 ## Sample E-Commerce App (packages/workspace/shop-api) Spec
+
 Language: plain JavaScript (ESM). It is a real Express app with real tests — not
 pseudocode. Every exported function MUST have a JSDoc block with `@param` and
 `@returns`. This JSDoc is what the parser exposes in the NodeInspector.
 
 Files and responsibilities:
-- src/models.js   : Product, CartItem, Cart, Voucher (code, type: "percent" | "fixed",
-                    value, expiresAt: Date, minSpend), Order, OrderTotal.
-                    Use Zod schemas for runtime input validation at the API boundary.
-- src/pricing.js  : lineTotal(), subtotal(), tax(), shipping()
+
+- src/models.js : Product, CartItem, Cart, Voucher (code, type: "percent" | "fixed",
+  value, expiresAt: Date, minSpend), Order, OrderTotal.
+  Use Zod schemas for runtime input validation at the API boundary.
+- src/pricing.js : lineTotal(), subtotal(), tax(), shipping()
 - src/vouchers.js : validateVoucher(voucher, now), applyVoucher(subtotal, voucher, now)
 - src/inventory.js: checkStock(), reserveStock()
 - src/checkout.js : calculateCheckoutTotal(cart, voucher, now), placeOrder()
-- src/api.js      : Express router: POST /cart/checkout, GET /products, GET /health
+- src/api.js : Express router: POST /cart/checkout, GET /products, GET /health
 - tests/test_checkout.test.js: Vitest test suite
 
 Data (must be identical across code and tests):
+
 - Products priced 19.90, 49.90, 129.00
 - Vouchers:
-    SAVE10    : type "percent", value 10
-    MINUS50   : type "fixed",   value 50
-    EXPIRED10 : type "percent", value 10, expiresAt in the past
+  SAVE10 : type "percent", value 10, expiresAt: null (never expires), minSpend: 50
+  MINUS50 : type "fixed", value 50, expiresAt: null (never expires), minSpend: 0
+  EXPIRED10 : type "percent", value 10, expiresAt in the past, minSpend: 0
+  SAVE10 and MINUS50 never expire so BUG 1 is reachable independently of BUG 2.
+  In `src/models.js` the Zod Voucher schema must use `expiresAt: z.date().nullable()`
+  and `minSpend: z.number().nonnegative()`, and the JSDoc must say `Date | null`
+  for `expiresAt`.
 - Tax rate and shipping rules: define them as named constants in pricing.js and use
   those same constants in the tests (no magic numbers).
 
@@ -93,29 +103,31 @@ calls `new Date()` or `Date.now()`. Tests pass fixed dates so results are
 deterministic.
 
 ## Two Bugs That MUST Be Planted (core of the demo — do not omit, do not "helpfully" fix)
+
 BUG 1 (vouchers.js + checkout.js):
-  A fixed-amount voucher is subtracted from the grand total WITHOUT
-  (a) capping the discount at the discountable subtotal, and
-  (b) flooring the grand total at zero.
-  Result: MINUS50 applied to a 30.00 cart produces -20.00.
-  Correct logic:
-      const discount = Math.min(voucher.value, discountableSubtotal)
-      const total    = Math.max(0, discountableSubtotal + tax + shipping - discount)
-  The buggy version must compute something like
-      const total = discountableSubtotal + tax + shipping - voucher.value
-  with no clamp and no floor.
+A fixed-amount voucher is subtracted from the grand total WITHOUT
+(a) capping the discount at the discountable subtotal, and
+(b) flooring the grand total at zero.
+Result: MINUS50 applied to a 30.00 cart produces -20.00.
+Correct logic:
+const discount = Math.min(voucher.value, discountableSubtotal)
+const total = Math.max(0, discountableSubtotal + tax + shipping - discount)
+The buggy version must compute something like
+const total = discountableSubtotal + tax + shipping - voucher.value
+with no clamp and no floor.
 
 BUG 2 (vouchers.js):
-  The expiry comparison is INVERTED. The current buggy code must read:
-      if (voucher.expiresAt > now) {
-        throw new Error("Voucher expired")
-      }
-  so that expired vouchers are ACCEPTED and valid vouchers are REJECTED.
-  Correct logic: throw if `voucher.expiresAt <= now`.
+The expiry comparison is INVERTED. The current buggy code must read:
+if (voucher.expiresAt !== null && voucher.expiresAt > now) {
+throw new Error("Voucher expired")
+}
+so that expired vouchers are ACCEPTED and valid vouchers are REJECTED.
+Correct logic: throw if `voucher.expiresAt !== null && voucher.expiresAt <= now`.
 
 Both bugs must be reachable through calculateCheckoutTotal() so tests catch them.
 
 ## Hard Rules
+
 1. Build only what the current phase asks for. Do not pre-implement later modules.
    Do not "conveniently" refactor already-accepted code.
 2. Do not modify files accepted in a prior phase unless the current phase explicitly
@@ -138,18 +150,24 @@ Both bugs must be reachable through calculateCheckoutTotal() so tests catch them
 9. At the end of each phase, output a Stage Report (format defined per phase) and
    STOP, waiting for review. Do not proceed to the next phase on your own.
 
+10. Git repo root is the parent of `aultai/` (`C:\Users\User\Desktop\hackathon 2026`).
+    The `aultai/` folder is a subdirectory. Run read-only git commands
+    (`git status`, `git diff`, `git log`) from the parent directory and use
+    `aultai/...` path prefixes in the output.
+
 ## General Code Style (JavaScript edition)
+
 - ESM only (`import` / `export`). Every package's `package.json` sets `"type": "module"`.
 - Every EXPORTED function has a JSDoc block. Required tags: `@param` for each arg,
   `@returns`. Optional: `@throws`. Example:
-      /**
-       * Calculate the final checkout total for a cart, applying an optional voucher.
-       * @param {import('./models.js').Cart} cart
-       * @param {import('./models.js').Voucher | null} voucher
-       * @param {Date} now
-       * @returns {number} The final total in the same currency unit as the cart.
-       */
-      export function calculateCheckoutTotal(cart, voucher, now) { ... }
+  /\*\*
+  _ Calculate the final checkout total for a cart, applying an optional voucher.
+  _ @param {import('./models.js').Cart} cart
+  _ @param {import('./models.js').Voucher | null} voucher
+  _ @param {Date} now
+  _ @returns {number} The final total in the same currency unit as the cart.
+  _/
+  export function calculateCheckoutTotal(cart, voucher, now) { ... }
 - Use `const` by default; `let` only when reassignment is required. Never `var`.
 - Use `===` and `!==`; never `==` or `!=` (except for `== null` when intentional,
   and even then prefer an explicit check).
@@ -163,6 +181,7 @@ Both bugs must be reachable through calculateCheckoutTotal() so tests catch them
   in code — only JSDoc comments.
 
 ## What "Node-appropriate" means for this project
+
 - Write idiomatic modern JavaScript. Do NOT try to mimic Python idioms
   (`snake_case`, `__init__`, `self`, `len()`) or TypeScript idioms (interface
   declarations, `as`, generics, enums).
@@ -180,6 +199,7 @@ Both bugs must be reachable through calculateCheckoutTotal() so tests catch them
   is none at compile time.
 
 ## Optional (only if you later decide you want static checking)
+
 If the human later asks for static checking, the recommended approach is
 `// @ts-check` at the top of files plus JSDoc — this does NOT change runtime, does
 NOT require `.ts` files, and does NOT require a build step. Do NOT add it unless
