@@ -60,3 +60,30 @@ export async function fetchNode(id) {
   }
   return res.json();
 }
+
+/**
+ * Run project analysis (heuristics + LLM pass).
+ * @returns {Promise<import("../types.js").AnalyzeResponse>} Issues and mode.
+ */
+export async function analyze() {
+  const res = await fetch(`${BASE}/analyze`, { method: "POST" });
+  if (!res.ok) {
+    await throwApiError(res, "analyze");
+  }
+  return res.json();
+}
+
+/**
+ * Explain a single graph node.
+ * @param {string} id Node id (e.g. "checkout.calculateCheckoutTotal").
+ * @returns {Promise<{ explanation: string }>} The explanation.
+ */
+export async function explainNode(id) {
+  const res = await fetch(`${BASE}/node/${encodeURIComponent(id)}/explain`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    await throwApiError(res, "explainNode");
+  }
+  return res.json();
+}

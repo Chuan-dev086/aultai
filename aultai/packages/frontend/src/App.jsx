@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { fetchGraph, loadProject } from "./api/client.js";
+import { analyze, fetchGraph, loadProject } from "./api/client.js";
 import FileTree from "./components/FileTree.jsx";
 import CodeGraph from "./components/CodeGraph.jsx";
 import NodeInspector from "./components/NodeInspector.jsx";
+import IssuesPanel from "./components/IssuesPanel.jsx";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -11,6 +12,11 @@ export default function App() {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
+  const [issues, setIssues] = useState([]);
+  const [analyzeMode, setAnalyzeMode] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [selectedIssueId, setSelectedIssueId] = useState(null);
+  const [rightTab, setRightTab] = useState("inspector");
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +70,41 @@ export default function App() {
     setSelectedNodeId(null);
   }
 
+  /**
+   * Run analysis and open the Issues tab.
+   * @returns {Promise<void>}
+   */
+  async function onAnalyze() {
+    setAnalyzing(true);
+    try {
+      const result = await analyze();
+      setIssues(result.issues);
+      setAnalyzeMode(result.mode);
+      setRightTab("issues");
+    } catch (err) {
+      setErrors([
+        {
+          endpoint: err.code !== undefined ? String(err.code) : "analyze",
+          message: err.message,
+        },
+      ]);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  /**
+   * Jump from an issue to its node in the Inspector.
+   * @param {import("./types.js").Issue} issue The clicked issue.
+   * @returns {void}
+   */
+  function onIssueClick(issue) {
+    setSelectedIssueId(issue.id);
+    setActiveFile(issue.file);
+    setSelectedNodeId(issue.node_id);
+    setRightTab("inspector");
+  }
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-950 text-slate-400">
@@ -93,6 +134,14 @@ export default function App() {
         <p className="text-xs text-slate-500">
           {project.files.length} files / {project.node_count} nodes / {project.edge_count} edges
         </p>
+        <button
+          type="button"
+          onClick={onAnalyze}
+          disabled={analyzing}
+          className="rounded bg-indigo-700 px-3 py-1 text-sm text-white hover:bg-indigo-600 disabled:opacity-50"
+        >
+          {analyzing ? "Analyzing…" : "Analyze"}
+        </button>
       </header>
       <div className="flex min-h-0 flex-1">
         <aside className="w-[260px] shrink-0 overflow-y-auto border-r border-slate-800">
@@ -108,8 +157,30 @@ export default function App() {
             onClearSelection={onClearSelection}
           />
         </main>
-        <aside className="w-[360px] shrink-0 overflow-y-auto border-l border-slate-800">
-          <NodeInspector nodeId={selectedNodeId} onNodeClick={onNodeClick} />
+        <aside className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-slate-800">
+          <div className="flex gap-1 border-b border-slate-800 p-2">
+            <button
+              type="button"
+              onClick={() => setRightTab("inspector")}
+              className={`rounded px-2 py-1 text-sm ${rightTab === "inspector" ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`}
+            >
+              Inspector
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("issues")}
+              className={`rounded px-2 py-1 text-sm ${rightTab === "issues" ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"}`}
+            >
+              Issues ({issues.length})
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {rightTab === "inspector" ? (
+              <NodeInspector nodeId={selectedNodeId} onNodeClick={onNodeClick} />
+            ) : (
+              <IssuesPanel issues={issues} mode={analyzeMode} onIssueClick={onIssueClick} />
+            )}
+          </div>
         </aside>
       </div>
     </div>

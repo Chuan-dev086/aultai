@@ -42,6 +42,25 @@ import { z } from "zod";
  * @property {number} edge_count
  */
 
+/**
+ * @typedef {Object} Issue
+ * @property {string} id
+ * @property {string} title
+ * @property {"low" | "medium" | "high"} severity
+ * @property {string} node_id
+ * @property {string} file
+ * @property {number} lineno
+ * @property {string} evidence
+ * @property {string} explanation
+ * @property {string} suggested_action
+ */
+
+/**
+ * @typedef {Object} AnalyzeResponse
+ * @property {Issue[]} issues
+ * @property {"live" | "mock"} mode
+ */
+
 export const NodeSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -80,4 +99,21 @@ export const ProjectInfoSchema = z.object({
   ),
   node_count: z.number(),
   edge_count: z.number(),
+});
+
+export const IssueSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  severity: z.enum(["low", "medium", "high"]),
+  node_id: z.string(),
+  file: z.string(),
+  lineno: z.number(),
+  evidence: z.string(),
+  explanation: z.string(),
+  suggested_action: z.string(),
+});
+
+export const AnalyzeResponseSchema = z.object({
+  issues: z.array(IssueSchema),
+  mode: z.enum(["live", "mock"]),
 });

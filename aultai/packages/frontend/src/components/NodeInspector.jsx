@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchNode } from "../api/client.js";
+import { explainNode, fetchNode } from "../api/client.js";
 
 /**
  * Clickable list of related node ids.
@@ -47,17 +47,24 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [explanation, setExplanation] = useState(null);
+  const [explaining, setExplaining] = useState(false);
+  const [explainError, setExplainError] = useState(null);
 
   useEffect(() => {
     if (nodeId === null) {
       setDetail(null);
       setError(null);
       setLoading(false);
+      setExplanation(null);
+      setExplainError(null);
       return undefined;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setExplanation(null);
+    setExplainError(null);
     fetchNode(nodeId)
       .then((d) => {
         if (!cancelled) {
@@ -100,13 +107,50 @@ export default function NodeInspector({ nodeId, onNodeClick }) {
   if (detail === null) {
     return <p className="p-4 text-sm text-slate-500">No data</p>;
   }
+
+  /**
+   * Request an AI explanation for the current node.
+   * @returns {Promise<void>}
+   */
+  async function onExplain() {
+    setExplaining(true);
+    setExplainError(null);
+    try {
+      const result = await explainNode(detail.id);
+      setExplanation(result.explanation);
+    } catch (err) {
+      setExplainError(err);
+    } finally {
+      setExplaining(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 overflow-y-auto p-4">
       <div>
         <p className="font-mono text-xs text-slate-500">
           {(detail.file ?? "unknown") + ":" + (detail.lineno ?? "?")}
         </p>
-        <h2 className="break-all font-mono text-sm font-bold text-slate-100">{detail.id}</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="break-all font-mono text-sm font-bold text-slate-100">{detail.id}</h2>
+          <button
+            type="button"
+            onClick={onExplain}
+            disabled={explaining}
+            className="shrink-0 rounded bg-sky-800 px-2 py-0.5 text-xs text-sky-100 hover:bg-sky-700 disabled:opacity-50"
+          >
+            {explaining ? "…" : "Explain"}
+          </button>
+        </div>
+        {explaining && <p className="mt-1 text-xs text-slate-500">Explaining…</p>}
+        {explainError !== null && (
+          <p className="mt-1 font-mono text-xs text-red-400">{explainError.message}</p>
+        )}
+        {explanation !== null && (
+          <p className="mt-1 rounded border border-slate-700 bg-slate-900 p-2 text-sm text-slate-300">
+            {explanation}
+          </p>
+        )}
         <span className="mt-1 inline-block rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-200">
           {detail.type}
         </span>
