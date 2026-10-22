@@ -1,0 +1,19 @@
+{
+  "name": "aultai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AultAI — AI-assisted software development tool prototype (Phase 0)",
+  "workspaces": [
+    "packages/*",
+    "packages/workspace/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node scripts/start.js",
+    "dev": "node scripts/start.js",
+    "test": "npm test -w packages/workspace/shop-api"
+  }
+}
