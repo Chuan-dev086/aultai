@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { connect, createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import nodeFs from "node:fs";
@@ -31,10 +32,10 @@ let dynamicStarting = null;
 
 /**
  * Extract an uploaded zip into packages/workspace/dynamic_project (cleared
- * first). Throws when no package.json exists at the archive root.
+ * first), promoting an unambiguous nested project directory when needed.
  * @param {string} zipFilePath Absolute path of the uploaded zip on disk.
  * @returns {Promise<{ success: true, message: string, path: string }>} Result.
- * @throws {Error} When the zip is invalid or lacks package.json.
+ * @throws {Error} When the zip is invalid or has no unambiguous project root.
  */
 export async function uploadProject(zipFilePath) {
   const target = path.resolve(WORKSPACE_DIR, DYNAMIC_SUBDIR);
@@ -43,10 +44,7 @@ export async function uploadProject(zipFilePath) {
   try {
     const archive = await unzipper.Open.file(zipFilePath);
     await extractArchive(archive, target);
-    if (!(await hasPackageJson(target))) {
-      await flattenSingleSubdir(target);
-    }
-    if (!(await hasPackageJson(target))) {
+    if (!(await normalizeProjectRoot(target))) {
       throw uploadError("Uploaded project must contain a package.json at its root");
     }
   } catch (err) {
@@ -374,48 +372,59 @@ async function ensurePortAvailable(port) {
 }
 
 /**
- * Check whether a directory contains a package.json file.
- * @param {string} dir Absolute path of the directory to check.
- * @returns {Promise<boolean>} True when package.json exists and is a file.
+ * Promote the shallowest unambiguous package root to the extraction root.
+ * This handles archives that include one or more wrapper directories without
+ * flattening deeper package directories in a monorepo.
+ * @param {string} target Absolute path of the extraction root.
+ * @returns {Promise<boolean>} Whether a package root was found and promoted.
  */
-async function hasPackageJson(dir) {
-  try {
-    const stat = await fs.stat(path.join(dir, "package.json"));
-    return stat.isFile();
-  } catch {
+async function normalizeProjectRoot(target) {
+  const queue = [target];
+  const packageRoots = [];
+  let packageDepth = null;
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const dir = queue[index];
+    const depth = path.relative(target, dir).split(path.sep).filter(Boolean).length;
+    if (packageDepth !== null && depth > packageDepth) {
+      break;
+    }
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    if (entries.some((entry) => entry.name === "package.json" && entry.isFile())) {
+      packageRoots.push(dir);
+      packageDepth = depth;
+      continue;
+    }
+    if (packageDepth === null) {
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          queue.push(path.join(dir, entry.name));
+        }
+      }
+    }
+  }
+
+  if (packageRoots.length === 0) {
     return false;
   }
-}
+  if (packageRoots.length > 1) {
+    throw uploadError(
+      "ZIP contains multiple project folders with package.json; upload the intended project folder",
+    );
+  }
+  if (packageRoots[0] === target) {
+    return true;
+  }
 
-/**
- * Flatten a zip that contains a single top-level folder (e.g. zipping
- * `my-app/` instead of its contents). Moves all files from that
- * subdirectory up to the target root and removes the empty subdirectory.
- * No-op unless the target holds exactly one directory containing a
- * package.json.
- * @param {string} target Absolute path of the extraction root.
- * @returns {Promise<void>} Resolves after flattening or no-op.
- */
-async function flattenSingleSubdir(target) {
-  let entries;
+  const promoted = path.join(path.dirname(target), `.${path.basename(target)}-${randomUUID()}`);
   try {
-    entries = await fs.readdir(target, { withFileTypes: true });
-  } catch {
-    return;
+    await fs.rename(packageRoots[0], promoted);
+    await fs.rm(target, { recursive: true, force: true });
+    await fs.rename(promoted, target);
+  } finally {
+    await fs.rm(promoted, { recursive: true, force: true });
   }
-  const dirs = entries.filter((entry) => entry.isDirectory());
-  if (dirs.length !== 1) {
-    return;
-  }
-  const sub = path.join(target, dirs[0].name);
-  if (!(await hasPackageJson(sub))) {
-    return;
-  }
-  const children = await fs.readdir(sub);
-  for (const child of children) {
-    await fs.rename(path.join(sub, child), path.join(target, child));
-  }
-  await fs.rm(sub, { recursive: true, force: true });
+  return true;
 }
 
 /**
